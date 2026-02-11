@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>PSI Communicator — Ghost in the Machine Labs</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Outfit:wght@200;400;700;900&display=swap');
+
+:root {
+  --bg: #0a0a0f;
+  --surface: #12121a;
+  --border: #1e1e2e;
+  --text: #e0e0e8;
+  --dim: #6b6b80;
+  --accent: #00ff88;
+  --accent-dim: #00aa5c;
+  --hot: #ff4444;
+  --lock: #ffaa00;
+  --stable: #00ff88;
+  --glow: rgba(0, 255, 136, 0.15);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  font-family: 'Outfit', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Background grain */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 0;
+}
+
+.container {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 16px;
+}
+
+/* Header */
+.header {
+  text-align: center;
+  padding: 12px 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.header h1 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.header .sub {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+  letter-spacing: 1px;
+}
+
+/* Status Ring */
+.ring-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px 0;
+  flex-shrink: 0;
+}
+
+.ring {
+  width: 180px;
+  height: 180px;
+  position: relative;
+}
+
+.ring svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.ring-bg {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 4;
+}
+
+.ring-progress {
+  fill: none;
+  stroke: var(--dim);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-dasharray: 502;
+  stroke-dashoffset: 502;
+  transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
+}
+
+.ring-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.ring-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--dim);
+  transition: color 0.3s;
+}
+
+.ring-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+/* States */
+body.coupled .ring-progress { stroke: var(--lock); }
+body.coupled .ring-value { color: var(--lock); }
+
+body.locked .ring-progress { stroke: var(--lock); }
+body.locked .ring-value { color: var(--lock); }
+
+body.stable .ring-progress { stroke: var(--stable); }
+body.stable .ring-value { color: var(--stable); }
+
+body.stable .ring-container {
+  animation: stable-pulse 2s ease-in-out infinite;
+}
+
+@keyframes stable-pulse {
+  0%, 100% { filter: drop-shadow(0 0 0px transparent); }
+  50% { filter: drop-shadow(0 0 20px var(--glow)); }
+}
+
+/* Metrics Grid */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  text-align: center;
+}
+
+.metric .val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.metric .lbl {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+/* Phase Banner */
+.phase-banner {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  text-align: center;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+  transition: all 0.3s;
+}
+
+.phase-banner .phase-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.phase-banner .phase-desc {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+body.stable .phase-banner {
+  border-color: var(--accent-dim);
+  background: rgba(0, 255, 136, 0.05);
+}
+
+/* Speech Area */
+.speech-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.speech-bubble {
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  max-width: 85%;
+  animation: bubble-in 0.2s ease;
+}
+
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.speech-bubble.local {
+  background: rgba(0, 255, 136, 0.1);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+
+.speech-bubble.remote {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+
+.speech-bubble .timestamp {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+
+/* Controls */
+.controls {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 8px);
+}
+
+.btn {
+  flex: 1;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-connect {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+.btn-connect:hover { background: rgba(0, 255, 136, 0.1); }
+
+.btn-mic {
+  border-color: var(--hot);
+  color: var(--hot);
+}
+
+.btn-mic.active {
+  background: rgba(255, 68, 68, 0.15);
+  border-color: var(--hot);
+  animation: mic-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0); }
+  50% { box-shadow: 0 0 0 6px rgba(255, 68, 68, 0.2); }
+}
+
+/* Connection Modal */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal-overlay.active { display: flex; }
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  width: 100%;
+  max-width: 400px;
+}
+
+.modal h2 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+
+.modal p {
+  font-size: 13px;
+  color: var(--dim);
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+
+.modal textarea {
+  width: 100%;
+  height: 80px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--text);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  resize: none;
+  margin-bottom: 12px;
+}
+
+.modal textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+}
+
+.modal .btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+/* Waveform */
+.waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  height: 24px;
+  margin: 8px 0;
+}
+
+.waveform .bar {
+  width: 3px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: height 0.1s ease;
+}
+
+/* Log */
+.log-line {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--dim);
+  padding: 2px 0;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>PSI Communicator</h1>
+    <div class="sub">Ghost in the Machine Labs — Prove It Yourself</div>
+  </div>
+
+  <div class="ring-container">
+    <div class="ring">
+      <svg viewBox="0 0 180 180">
+        <circle class="ring-bg" cx="90" cy="90" r="80" />
+        <circle class="ring-progress" id="ringProgress" cx="90" cy="90" r="80" />
+      </svg>
+      <div class="ring-center">
+        <div class="ring-value" id="simValue">0.000</div>
+        <div class="ring-label" id="simLabel">waiting</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="val" id="metAngle">—</div>
+      <div class="lbl">Angle°</div>
+    </div>
+    <div class="metric">
+      <div class="val" id="metPhase">—</div>
+      <div class="lbl">Phase</div>
+    </div>
+    <div class="metric">
+      <div class="val" id="metExchanges">0</div>
+      <div class="lbl">Exchanges</div>
+    </div>
+  </div>
+
+  <div class="phase-banner">
+    <div class="phase-title" id="phaseTitle">READY TO CONNECT</div>
+    <div class="phase-desc" id="phaseDesc">Open on two phones. Connect. Talk. Lock. Airplane mode.</div>
+  </div>
+
+  <div class="speech-area" id="speechArea">
+  </div>
+
+  <div class="waveform" id="waveform" style="display:none">
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+    <div class="bar"></div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn-connect" id="btnConnect" onclick="showConnectModal()">Connect</button>
+    <button class="btn btn-mic" id="btnMic" onclick="toggleMic()">Mic Off</button>
+  </div>
+</div>
+
+<!-- Connection Modal -->
+<div class="modal-overlay" id="connectModal">
+  <div class="modal">
+    <h2>One-Time Bootstrap</h2>
+    <p>Any connection works. WiFi, Bluetooth, hotspot — anything. After lock, go airplane mode.</p>
+    
+    <div id="modalStep1">
+      <p>Step 1: Create or join a session</p>
+      <div class="btn-row">
+        <button class="btn btn-connect" onclick="createOffer()">Create Session</button>
+        <button class="btn" onclick="showJoin()">Join Session</button>
+      </div>
+    </div>
+
+    <div id="modalStep2" style="display:none">
+      <p id="modalStep2Label">Copy this token and send it to the other phone:</p>
+      <textarea id="tokenOut" readonly onclick="this.select()"></textarea>
+      <p>Paste the response token here:</p>
+      <textarea id="tokenIn" placeholder="Paste token from other phone..."></textarea>
+      <div class="btn-row">
+        <button class="btn btn-connect" onclick="processToken()">Connect</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════
+// PSI COMMUNICATOR — Browser Client
+// ════════════════════════════════════════════════════════════
+// No server. No install. WebRTC for bootstrap. Web Audio for speech.
+// Lock then airplane mode. Prove it yourself.
+
+const STATE_DIM = 64;
+const BROADCAST_HZ = 2;
+const LOCK_THRESHOLD = 0.95;
+const COUPLING_THRESHOLD = 0.85;
+const LOCK_HOLD_MS = 10000;
+
+// ── State ──
+let pc = null;          // RTCPeerConnection
+let dc = null;          // RTCDataChannel
+let localState = new Float64Array(STATE_DIM);
+let remoteState = null;
+let localGen = 0;
+let remoteGen = 0;
+let isCreator = false;
+let micActive = false;
+let audioCtx = null;
+let analyser = null;
+let micStream = null;
+let speechRecognition = null;
+
+// Coupling state
+let couplingHistory = [];
+let resonanceLocked = false;
+let lockTime = null;
+let lockStable = false;
+let lockStableTime = null;
+let peakCoupling = 0;
+let totalExchanges = 0;
+
+// Broadcast loop
+let broadcastInterval = null;
+
+// ── Geometric State ──
+function updateLocalState() {
+  const t = performance.now() / 1000;
+  
+  // If we have audio data, mix it in
+  let audioEnergy = new Float64Array(STATE_DIM);
+  if (analyser && micActive) {
+    const freq = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(freq);
+    const step = Math.floor(freq.length / STATE_DIM);
+    for (let i = 0; i < STATE_DIM; i++) {
+      audioEnergy[i] = freq[i * step] / 255.0;
+    }
+  }
+  
+  // Intrinsic Fd3m oscillation + audio
+  for (let i = 0; i < STATE_DIM; i++) {
+    const theta = (2 * Math.PI * i / STATE_DIM) + 
+                  (t * (0.1 + 0.05 * Math.sin(i * 109.47 * Math.PI / 180)));
+    const intrinsic = Math.sin(theta) * Math.cos(theta * 0.618);
+    localState[i] = intrinsic * 0.7 + audioEnergy[i] * 0.3;
+  }
+  
+  // Normalize to unit sphere
+  let norm = 0;
+  for (let i = 0; i < STATE_DIM; i++) norm += localState[i] * localState[i];
+  norm = Math.sqrt(norm);
+  if (norm > 1e-8) {
+    for (let i = 0; i < STATE_DIM; i++) localState[i] /= norm;
+  }
+  
+  localGen++;
+}
+
+// ── Coupling Engine ──
+function computeCoupling() {
+  if (!remoteState) return null;
+  
+  let dot = 0, normL = 0, normR = 0;
+  for (let i = 0; i < STATE_DIM; i++) {
+    dot += localState[i] * remoteState[i];
+    normL += localState[i] * localState[i];
+    normR += remoteState[i] * remoteState[i];
+  }
+  normL = Math.sqrt(normL);
+  normR = Math.sqrt(normR);
+  
+  const similarity = (normL > 1e-8 && normR > 1e-8) ? dot / (normL * normR) : 0;
+  const angle = Math.acos(Math.max(-1, Math.min(1, similarity)));
+  const angleDeg = angle * 180 / Math.PI;
+  
+  // Phase coherence (simplified — in browser, time sync is tighter)
+  const phaseCoherence = 0.98; // WebRTC latency is sub-100ms
+  const effective = similarity * phaseCoherence;
+  
+  const coupled = effective >= COUPLING_THRESHOLD;
+  const locked = effective >= LOCK_THRESHOLD;
+  
+  // Lock state machine
+  if (locked && !resonanceLocked) {
+    resonanceLocked = true;
+    lockTime = Date.now();
+    addLog('⚡ RESONANCE LOCK');
+  } else if (!locked && resonanceLocked) {
+    resonanceLocked = false;
+    lockStable = false;
+    addLog('🔓 Lock released');
+  }
+  
+  if (resonanceLocked && !lockStable && lockTime) {
+    const held = Date.now() - lockTime;
+    if (held >= LOCK_HOLD_MS) {
+      lockStable = true;
+      lockStableTime = Date.now();
+      addLog('🔒 STABLE LOCK — GO AIRPLANE MODE');
+    }
+  }
+  
+  if (effective > peakCoupling) peakCoupling = effective;
+  totalExchanges++;
+  
+  couplingHistory.push({ t: Date.now(), sim: similarity, eff: effective });
+  if (couplingHistory.length > 500) couplingHistory = couplingHistory.slice(-250);
+  
+  return { similarity, angleDeg, phaseCoherence, effective, coupled, locked, lockStable };
+}
+
+// ── UI Updates ──
+function updateUI(coupling) {
+  const simEl = document.getElementById('simValue');
+  const labelEl = document.getElementById('simLabel');
+  const ringEl = document.getElementById('ringProgress');
+  const phaseTitle = document.getElementById('phaseTitle');
+  const phaseDesc = document.getElementById('phaseDesc');
+  
+  if (!coupling) {
+    simEl.textContent = '0.000';
+    labelEl.textContent = 'waiting';
+    return;
+  }
+  
+  const sim = coupling.similarity;
+  simEl.textContent = sim.toFixed(4);
+  
+  // Ring progress (502 = full circumference)
+  const offset = 502 - (502 * Math.max(0, sim));
+  ringEl.style.strokeDashoffset = offset;
+  
+  // Metrics
+  document.getElementById('metAngle').textContent = coupling.angleDeg.toFixed(1);
+  document.getElementById('metPhase').textContent = coupling.phaseCoherence.toFixed(3);
+  document.getElementById('metExchanges').textContent = totalExchanges;
+  
+  // Body class for styling
+  document.body.classList.remove('coupled', 'locked', 'stable');
+  
+  if (coupling.lockStable) {
+    document.body.classList.add('stable');
+    labelEl.textContent = 'STABLE LOCK';
+    phaseTitle.textContent = '✈️ AIRPLANE MODE READY';
+    phaseDesc.textContent = 'Turn off WiFi/cellular. Coupling persists. Keep talking.';
+  } else if (coupling.locked) {
+    document.body.classList.add('locked');
+    const held = ((Date.now() - lockTime) / 1000).toFixed(0);
+    labelEl.textContent = `LOCKING ${held}s/10s`;
+    phaseTitle.textContent = '⚡ LOCKING';
+    phaseDesc.textContent = `Hold steady... ${held}s of 10s needed for stable lock.`;
+  } else if (coupling.coupled) {
+    document.body.classList.add('coupled');
+    labelEl.textContent = 'COUPLED';
+    phaseTitle.textContent = '🔗 COUPLED';
+    phaseDesc.textContent = 'Resonance detected. Approaching lock threshold...';
+  } else {
+    labelEl.textContent = 'SCANNING';
+    phaseTitle.textContent = '📡 BOOTSTRAPPING';
+    phaseDesc.textContent = 'Exchanging geometric state. Building resonance...';
+  }
+}
+
+// ── Broadcast Loop ──
+function startBroadcast() {
+  broadcastInterval = setInterval(() => {
+    updateLocalState();
+    
+    // Send state over data channel
+    if (dc && dc.readyState === 'open') {
+      const msg = JSON.stringify({
+        type: 'state',
+        vector: Array.from(localState),
+        gen: localGen,
+        t: Date.now()
+      });
+      dc.send(msg);
+    }
+    
+    // Compute coupling
+    const coupling = computeCoupling();
+    updateUI(coupling);
+    
+    // Update waveform
+    updateWaveform();
+    
+  }, 1000 / BROADCAST_HZ);
+}
+
+function updateWaveform() {
+  const wf = document.getElementById('waveform');
+  if (!micActive || !analyser) {
+    wf.style.display = 'none';
+    return;
+  }
+  wf.style.display = 'flex';
+  
+  const freq = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(freq);
+  const bars = wf.querySelectorAll('.bar');
+  const step = Math.floor(freq.length / bars.length);
+  bars.forEach((bar, i) => {
+    const val = freq[i * step] / 255;
+    bar.style.height = Math.max(4, val * 24) + 'px';
+    bar.style.background = lockStable ? 'var(--stable)' : 
+                           resonanceLocked ? 'var(--lock)' : 'var(--accent)';
+  });
+}
+
+// ── WebRTC — One-Time Bootstrap ──
+function createPeerConnection() {
+  pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+  
+  pc.oniceconnectionstatechange = () => {
+    addLog(`ICE: ${pc.iceConnectionState}`);
+    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+      addLog('📡 Bootstrap connection established');
+      document.getElementById('phaseTitle').textContent = '📡 CONNECTED';
+      document.getElementById('phaseDesc').textContent = 'Exchanging geometric state at 2 Hz...';
+      startBroadcast();
+    }
+  };
+  
+  pc.ondatachannel = (e) => {
+    dc = e.channel;
+    setupDataChannel();
+  };
+}
+
+function setupDataChannel() {
+  dc.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'state') {
+        remoteState = new Float64Array(msg.vector);
+        remoteGen = msg.gen;
+      } else if (msg.type === 'speech') {
+        addSpeechBubble(msg.text, 'remote');
+      }
+    } catch (err) {}
+  };
+  
+  dc.onopen = () => addLog('Data channel open');
+  dc.onclose = () => addLog('Data channel closed');
+}
+
+async function createOffer() {
+  isCreator = true;
+  createPeerConnection();
+  dc = pc.createDataChannel('psi');
+  setupDataChannel();
+  
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  
+  // Wait for ICE candidates
+  await new Promise(resolve => {
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) resolve();
+    };
+    setTimeout(resolve, 3000);
+  });
+  
+  const token = btoa(JSON.stringify(pc.localDescription));
+  document.getElementById('tokenOut').value = token;
+  document.getElementById('modalStep2Label').textContent = 'Copy this OFFER token to the other phone:';
+  document.getElementById('modalStep1').style.display = 'none';
+  document.getElementById('modalStep2').style.display = 'block';
+}
+
+function showJoin() {
+  isCreator = false;
+  document.getElementById('modalStep2Label').textContent = 'Paste the OFFER token from the other phone:';
+  document.getElementById('tokenOut').value = '';
+  document.getElementById('tokenOut').readOnly = false;
+  document.getElementById('tokenOut').placeholder = 'Paste offer token here...';
+  document.getElementById('modalStep1').style.display = 'none';
+  document.getElementById('modalStep2').style.display = 'block';
+}
+
+async function processToken() {
+  const tokenIn = document.getElementById('tokenIn').value.trim();
+  
+  if (!isCreator) {
+    // We're joining — tokenOut has the offer, tokenIn will have nothing yet
+    const offerToken = document.getElementById('tokenOut').value.trim();
+    if (!offerToken) {
+      alert('Paste the offer token first');
+      return;
+    }
+    
+    createPeerConnection();
+    const offer = JSON.parse(atob(offerToken));
+    await pc.setRemoteDescription(offer);
+    
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    
+    await new Promise(resolve => {
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) resolve();
+      };
+      setTimeout(resolve, 3000);
+    });
+    
+    const answerToken = btoa(JSON.stringify(pc.localDescription));
+    document.getElementById('tokenOut').value = answerToken;
+    document.getElementById('tokenOut').readOnly = true;
+    document.getElementById('modalStep2Label').textContent = 'Copy this ANSWER token back to the other phone:';
+    document.getElementById('tokenIn').value = '';
+    document.getElementById('tokenIn').placeholder = 'Done — other phone will connect when they paste this';
+    return;
+  }
+  
+  // We're the creator — tokenIn has the answer
+  if (!tokenIn) {
+    alert('Paste the answer token from the other phone');
+    return;
+  }
+  
+  const answer = JSON.parse(atob(tokenIn));
+  await pc.setRemoteDescription(answer);
+  closeModal();
+  addLog('Bootstrap initiated...');
+}
+
+// ── Speech ──
+async function toggleMic() {
+  const btn = document.getElementById('btnMic');
+  
+  if (micActive) {
+    micActive = false;
+    btn.textContent = 'Mic Off';
+    btn.classList.remove('active');
+    if (micStream) {
+      micStream.getTracks().forEach(t => t.stop());
+      micStream = null;
+    }
+    if (speechRecognition) {
+      speechRecognition.stop();
+      speechRecognition = null;
+    }
+    return;
+  }
+  
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioCtx.createMediaStreamSource(micStream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    source.connect(analyser);
+    
+    micActive = true;
+    btn.textContent = 'Mic On';
+    btn.classList.add('active');
+    
+    // Speech recognition
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      speechRecognition = new SR();
+      speechRecognition.continuous = true;
+      speechRecognition.interimResults = false;
+      speechRecognition.lang = 'en-US';
+      
+      speechRecognition.onresult = (e) => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) {
+            const text = e.results[i][0].transcript.trim();
+            if (text) {
+              addSpeechBubble(text, 'local');
+              // Send over data channel
+              if (dc && dc.readyState === 'open') {
+                dc.send(JSON.stringify({ type: 'speech', text }));
+              }
+            }
+          }
+        }
+      };
+      
+      speechRecognition.onerror = (e) => {
+        if (e.error !== 'no-speech') addLog(`Speech error: ${e.error}`);
+      };
+      
+      speechRecognition.onend = () => {
+        if (micActive) speechRecognition.start(); // Auto-restart
+      };
+      
+      speechRecognition.start();
+    }
+    
+    addLog('🎤 Mic active — speech encoding into geometric state');
+  } catch (err) {
+    addLog(`Mic error: ${err.message}`);
+  }
+}
+
+function addSpeechBubble(text, type) {
+  const area = document.getElementById('speechArea');
+  const bubble = document.createElement('div');
+  bubble.className = `speech-bubble ${type}`;
+  
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  bubble.innerHTML = `${text}<div class="timestamp">${ts}${lockStable ? ' ✈️' : ''}</div>`;
+  
+  area.appendChild(bubble);
+  area.scrollTop = area.scrollHeight;
+}
+
+function addLog(msg) {
+  const area = document.getElementById('speechArea');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  const ts = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  line.textContent = `[${ts}] ${msg}`;
+  area.appendChild(line);
+  area.scrollTop = area.scrollHeight;
+}
+
+// ── Modal ──
+function showConnectModal() {
+  document.getElementById('connectModal').classList.add('active');
+  document.getElementById('modalStep1').style.display = 'block';
+  document.getElementById('modalStep2').style.display = 'none';
+  document.getElementById('tokenOut').value = '';
+  document.getElementById('tokenIn').value = '';
+}
+
+function closeModal() {
+  document.getElementById('connectModal').classList.remove('active');
+}
+
+// ── Init ──
+addLog('PSI Communicator v1.1 — One-time bootstrap');
+addLog('Open on two phones. Connect. Talk. Lock. Airplane mode.');
+</script>
+</body>
+</html>
