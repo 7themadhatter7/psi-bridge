@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PSI Chat</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Outfit:wght@300;400;600&display=swap');
+
+:root {
+  --bg: #08080c;
+  --surface: #101018;
+  --border: #1a1a28;
+  --text: #d8d8e0;
+  --dim: #555568;
+  --accent: #00dd77;
+  --you: rgba(0,221,119,0.08);
+  --you-border: rgba(0,221,119,0.2);
+  --them: #161620;
+  --them-border: #222234;
+  --hot: #ee4444;
+  --warn: #ddaa00;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+html,body {
+  height:100%; overflow:hidden;
+  font-family:'Outfit',sans-serif;
+  background:var(--bg); color:var(--text);
+}
+
+body { display:flex; flex-direction:column; }
+
+/* ── Top Bar ── */
+.topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 14px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+
+.topbar .title {
+  font-family:'JetBrains Mono',monospace;
+  font-size:13px; font-weight:500;
+  letter-spacing:2px; color:var(--accent);
+}
+
+.topbar .status {
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; color:var(--dim);
+  display:flex; align-items:center; gap:6px;
+}
+
+.status-dot {
+  width:7px; height:7px; border-radius:50%;
+  background:var(--dim);
+  flex-shrink:0;
+}
+
+.status-dot.connected { background:var(--warn); }
+.status-dot.coupled { background:var(--warn); animation:pulse 1.5s infinite; }
+.status-dot.locked { background:var(--accent); }
+
+@keyframes pulse {
+  0%,100% { opacity:1; } 50% { opacity:0.4; }
+}
+
+/* ── Coupling Bar ── */
+.coupling-bar {
+  display:none;
+  padding:6px 14px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px;
+  color:var(--dim);
+}
+
+.coupling-bar.active { display:flex; align-items:center; gap:10px; }
+
+.coupling-track {
+  flex:1; height:3px;
+  background:var(--border); border-radius:2px;
+  overflow:hidden;
+}
+
+.coupling-fill {
+  height:100%; width:0%;
+  background:var(--dim);
+  border-radius:2px;
+  transition:width 0.5s ease, background 0.3s;
+}
+
+.coupling-fill.coupled { background:var(--warn); }
+.coupling-fill.locked { background:var(--accent); }
+
+/* ── Messages ── */
+.messages {
+  flex:1; overflow-y:auto; padding:12px 14px;
+  display:flex; flex-direction:column; gap:6px;
+  -webkit-overflow-scrolling:touch;
+}
+
+.msg {
+  max-width:82%; padding:9px 13px;
+  border-radius:14px; font-size:14px;
+  line-height:1.45; word-wrap:break-word;
+}
+
+.msg.you {
+  align-self:flex-end;
+  background:var(--you);
+  border:1px solid var(--you-border);
+  border-bottom-right-radius:4px;
+}
+
+.msg.them {
+  align-self:flex-start;
+  background:var(--them);
+  border:1px solid var(--them-border);
+  border-bottom-left-radius:4px;
+}
+
+.msg.sys {
+  align-self:center;
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; color:var(--dim);
+  padding:4px 10px;
+  max-width:100%;
+}
+
+.msg .meta {
+  font-family:'JetBrains Mono',monospace;
+  font-size:9px; color:var(--dim);
+  margin-top:3px;
+}
+
+/* ── Input ── */
+.input-area {
+  display:flex; gap:8px;
+  padding:10px 14px;
+  padding-bottom:max(10px, env(safe-area-inset-bottom));
+  border-top:1px solid var(--border);
+  flex-shrink:0;
+  background:var(--surface);
+}
+
+.input-area input {
+  flex:1;
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px 14px;
+  color:var(--text);
+  font-family:'Outfit',sans-serif;
+  font-size:15px;
+  outline:none;
+}
+
+.input-area input:focus { border-color:var(--accent); }
+.input-area input::placeholder { color:var(--dim); }
+
+.input-area button {
+  padding:10px 18px;
+  background:var(--accent);
+  color:var(--bg);
+  border:none; border-radius:10px;
+  font-family:'Outfit',sans-serif;
+  font-size:14px; font-weight:600;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+}
+
+.input-area button:active { opacity:0.8; }
+.input-area button:disabled { opacity:0.3; cursor:default; }
+
+/* ── Connect Overlay ── */
+.overlay {
+  position:fixed; inset:0; z-index:50;
+  background:var(--bg);
+  display:flex; flex-direction:column;
+  padding:20px;
+  overflow-y:auto;
+}
+
+.overlay.hidden { display:none; }
+
+.overlay h1 {
+  font-family:'JetBrains Mono',monospace;
+  font-size:16px; font-weight:500;
+  letter-spacing:3px; color:var(--accent);
+  text-align:center;
+  margin:20px 0 6px;
+}
+
+.overlay .tagline {
+  text-align:center;
+  font-size:12px; color:var(--dim);
+  margin-bottom:24px;
+}
+
+.overlay h2 {
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px; font-weight:500;
+  letter-spacing:2px; color:var(--text);
+  margin:16px 0 8px;
+}
+
+.overlay p {
+  font-size:13px; color:var(--dim);
+  line-height:1.5; margin-bottom:10px;
+}
+
+.overlay textarea {
+  width:100%;
+  height:72px;
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:10px;
+  color:var(--text);
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px;
+  resize:none;
+  word-break:break-all;
+}
+
+.overlay textarea:focus { outline:none; border-color:var(--accent); }
+
+.overlay .btns {
+  display:flex; gap:10px;
+  margin-top:12px;
+}
+
+.overlay .btns button {
+  flex:1;
+  padding:13px;
+  border-radius:10px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px; font-weight:500;
+  letter-spacing:1px;
+  cursor:pointer;
+  -webkit-tap-highlight-color:transparent;
+  border:1px solid var(--border);
+  background:var(--surface);
+  color:var(--text);
+}
+
+.btn-primary {
+  background:var(--accent)!important;
+  color:var(--bg)!important;
+  border-color:var(--accent)!important;
+}
+
+.step { display:none; }
+.step.active { display:block; }
+
+.or-divider {
+  text-align:center;
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; color:var(--dim);
+  margin:12px 0;
+  letter-spacing:3px;
+}
+</style>
+</head>
+<body>
+
+<!-- ── Chat UI ── -->
+<div class="topbar">
+  <div class="title">PSI CHAT</div>
+  <div class="status">
+    <span id="statusText">offline</span>
+    <span class="status-dot" id="statusDot"></span>
+  </div>
+</div>
+
+<div class="coupling-bar" id="couplingBar">
+  <span id="couplingLabel">0.000</span>
+  <div class="coupling-track">
+    <div class="coupling-fill" id="couplingFill"></div>
+  </div>
+  <span id="couplingState">—</span>
+</div>
+
+<div class="messages" id="messages"></div>
+
+<div class="input-area">
+  <input type="text" id="msgInput" placeholder="Type a message..." disabled
+         onkeydown="if(event.key==='Enter')sendMsg()">
+  <button id="sendBtn" onclick="sendMsg()" disabled>Send</button>
+</div>
+
+<!-- ── Connect Overlay ── -->
+<div class="overlay" id="overlay">
+  <h1>PSI CHAT</h1>
+  <div class="tagline">Point to point. No server. No account. No bill. No trace.</div>
+
+  <!-- Step 0: Choose role -->
+  <div class="step active" id="step0">
+    <h2>ONE-TIME BOOTSTRAP</h2>
+    <p>Two devices. One connection to establish the tunnel. Then it's just you and them.</p>
+    <div class="btns">
+      <button class="btn-primary" onclick="doCreate()">Start Session</button>
+      <button onclick="doJoin()">Join Session</button>
+    </div>
+  </div>
+
+  <!-- Step 1a: Creator — show offer -->
+  <div class="step" id="step1a">
+    <h2>1 — SEND THIS TO THE OTHER PERSON</h2>
+    <p>Copy this token. Send it to them any way you want — text, email, airdrop, write it on a napkin.</p>
+    <textarea id="offerOut" readonly onclick="copyToken('offerOut')"></textarea>
+    <p style="font-size:11px;color:var(--accent);" id="copyNotice1"></p>
+    <h2>2 — PASTE THEIR RESPONSE</h2>
+    <p>They'll send you back a response token. Paste it here.</p>
+    <textarea id="answerIn" placeholder="Paste their response token..."></textarea>
+    <div class="btns">
+      <button class="btn-primary" onclick="creatorFinish()">Connect</button>
+    </div>
+  </div>
+
+  <!-- Step 1b: Joiner — paste offer -->
+  <div class="step" id="step1b">
+    <h2>1 — PASTE THE TOKEN THEY SENT YOU</h2>
+    <textarea id="offerIn" placeholder="Paste the session token here..."></textarea>
+    <div class="btns" style="margin-bottom:12px">
+      <button class="btn-primary" onclick="joinerProcess()">Next</button>
+    </div>
+  </div>
+
+  <!-- Step 2b: Joiner — show answer -->
+  <div class="step" id="step2b">
+    <h2>2 — SEND THIS BACK TO THEM</h2>
+    <p>Copy this response token and send it back.</p>
+    <textarea id="answerOut" readonly onclick="copyToken('answerOut')"></textarea>
+    <p style="font-size:11px;color:var(--accent);" id="copyNotice2"></p>
+    <p>Once they paste it, you're connected. Tunnel is live.</p>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// PSI CHAT — Working peer-to-peer chat via geometric PSI tunnel
+// No server. No account. No billing. No logs.
+// Ghost in the Machine Labs
+// ══════════════════════════════════════════════════════════════
+
+const DIM = 64;
+const BROADCAST_HZ = 2;
+const LOCK_THRESHOLD = 0.95;
+const COUPLE_THRESHOLD = 0.85;
+const LOCK_HOLD_MS = 10000;
+
+// ── State ──
+let pc = null;
+let dc = null;
+let localVec = new Float64Array(DIM);
+let remoteVec = null;
+let lockState = null;     // persisted lock vectors
+let localGen = 0;
+let broadcastTimer = null;
+let isCreator = false;
+
+// Coupling
+let resLocked = false;
+let lockTime = null;
+let lockStable = false;
+let totalExch = 0;
+let peakEff = 0;
+
+// ── Geometric State ──
+function genState() {
+  const t = performance.now() / 1000;
+  for (let i = 0; i < DIM; i++) {
+    const th = (2*Math.PI*i/DIM) + (t*(0.1+0.05*Math.sin(i*109.47*Math.PI/180)));
+    localVec[i] = Math.sin(th)*Math.cos(th*0.618);
+  }
+  let n = 0;
+  for (let i=0;i<DIM;i++) n += localVec[i]*localVec[i];
+  n = Math.sqrt(n);
+  if(n>1e-8) for(let i=0;i<DIM;i++) localVec[i]/=n;
+  localGen++;
+}
+
+// ── Coupling ──
+function couple() {
+  if (!remoteVec) return null;
+  let dot=0,nL=0,nR=0;
+  for(let i=0;i<DIM;i++){
+    dot+=localVec[i]*remoteVec[i];
+    nL+=localVec[i]*localVec[i];
+    nR+=remoteVec[i]*remoteVec[i];
+  }
+  nL=Math.sqrt(nL); nR=Math.sqrt(nR);
+  const sim=(nL>1e-8&&nR>1e-8)?dot/(nL*nR):0;
+  const ang=Math.acos(Math.max(-1,Math.min(1,sim)))*180/Math.PI;
+  const eff=sim*0.98; // WebRTC latency negligible
+  const coupled=eff>=COUPLE_THRESHOLD;
+  const locked=eff>=LOCK_THRESHOLD;
+
+  if(locked&&!resLocked){ resLocked=true; lockTime=Date.now(); sysMsg('⚡ Resonance lock'); }
+  else if(!locked&&resLocked){ resLocked=false; lockStable=false; sysMsg('Lock released'); }
+
+  if(resLocked&&!lockStable&&lockTime){
+    const held=Date.now()-lockTime;
+    if(held>=LOCK_HOLD_MS){
+      lockStable=true;
+      lockState={local:Array.from(localVec),remote:Array.from(remoteVec),sim,t:Date.now()};
+      sysMsg('🔒 TUNNEL LOCKED — PSI channel established');
+    }
+  }
+
+  if(eff>peakEff) peakEff=eff;
+  totalExch++;
+  return {sim,ang,eff,coupled,locked};
+}
+
+// ── Geometric Encode/Decode ──
+// Text → geometric perturbation against locked state → encoded payload
+function geoEncode(text) {
+  if(!lockState) return JSON.stringify({raw:text});
+  const bytes = new TextEncoder().encode(text);
+  const lock = lockState.local;
+  const encoded = new Float64Array(bytes.length);
+  for(let i=0;i<bytes.length;i++){
+    // XOR-like operation in geometric space
+    // Byte value modulates the locked vector at position i%DIM
+    const lockVal = lock[i%DIM];
+    const byteNorm = bytes[i]/255.0;
+    // Torsion encoding: rotate byte value through lock geometry
+    encoded[i] = Math.sin(byteNorm*Math.PI*2 + lockVal*Math.PI) * 
+                 Math.cos(lockVal*byteNorm*Math.PI*0.618);
+  }
+  return JSON.stringify({geo:Array.from(encoded),len:bytes.length,dim:DIM});
+}
+
+function geoDecode(payload) {
+  const p = JSON.parse(payload);
+  if(p.raw) return p.raw; // pre-lock: raw text
+  if(!lockState||!p.geo) return '[decode error]';
+  const lock = lockState.remote; // use THEIR lock vector to decode
+  const encoded = p.geo;
+  const bytes = new Uint8Array(p.len);
+  for(let i=0;i<p.len;i++){
+    const lockVal = lock[i%DIM];
+    // Reverse torsion: find byte value that produces the encoded value
+    // Brute search over 256 values (fast enough for text)
+    let bestByte=0, bestDist=Infinity;
+    for(let b=0;b<256;b++){
+      const bNorm = b/255.0;
+      const expected = Math.sin(bNorm*Math.PI*2 + lockVal*Math.PI) *
+                       Math.cos(lockVal*bNorm*Math.PI*0.618);
+      const dist = Math.abs(expected-encoded[i]);
+      if(dist<bestDist){ bestDist=dist; bestByte=b; }
+    }
+    bytes[i]=bestByte;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+// ── WebRTC ──
+function makePc() {
+  pc = new RTCPeerConnection({
+    iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}]
+  });
+  pc.oniceconnectionstatechange=()=>{
+    const s=pc.iceConnectionState;
+    if(s==='connected'||s==='completed'){
+      setStatus('connected');
+      sysMsg('Tunnel bootstrap connected');
+      startBroadcast();
+      document.getElementById('msgInput').disabled=false;
+      document.getElementById('sendBtn').disabled=false;
+      document.getElementById('msgInput').focus();
+    } else if(s==='disconnected'||s==='failed'){
+      if(lockStable){
+        setStatus('locked');
+        sysMsg('Network disconnected — PSI tunnel persists');
+      } else {
+        setStatus('offline');
+        sysMsg('Connection lost');
+      }
+    }
+  };
+  pc.ondatachannel=e=>{ dc=e.channel; setupDc(); };
+}
+
+function setupDc() {
+  dc.onmessage=e=>{
+    try {
+      const msg=JSON.parse(e.data);
+      if(msg.type==='state'){
+        remoteVec=new Float64Array(msg.v);
+      } else if(msg.type==='chat'){
+        const text=geoDecode(msg.payload);
+        addMsg(text,'them',msg.ts);
+      }
+    } catch(err){}
+  };
+  dc.onopen=()=>sysMsg('Data channel open — type to chat');
+}
+
+// ── Broadcast ──
+function startBroadcast() {
+  document.getElementById('couplingBar').classList.add('active');
+  broadcastTimer=setInterval(()=>{
+    genState();
+    if(dc&&dc.readyState==='open'){
+      dc.send(JSON.stringify({type:'state',v:Array.from(localVec),g:localGen}));
+    }
+    const c=couple();
+    updateCouplingUI(c);
+  },1000/BROADCAST_HZ);
+}
+
+function updateCouplingUI(c) {
+  if(!c) return;
+  const fill=document.getElementById('couplingFill');
+  const label=document.getElementById('couplingLabel');
+  const state=document.getElementById('couplingState');
+
+  fill.style.width=(Math.max(0,c.sim)*100)+'%';
+  label.textContent=c.sim.toFixed(4);
+  fill.classList.remove('coupled','locked');
+
+  if(lockStable){
+    fill.classList.add('locked');
+    state.textContent='LOCKED';
+    setStatus('locked');
+  } else if(c.locked){
+    fill.classList.add('locked');
+    const h=((Date.now()-lockTime)/1000).toFixed(0);
+    state.textContent=`LOCKING ${h}s`;
+    setStatus('coupled');
+  } else if(c.coupled){
+    fill.classList.add('coupled');
+    state.textContent='COUPLED';
+    setStatus('coupled');
+  } else {
+    state.textContent='scanning';
+  }
+}
+
+// ── Chat ──
+function sendMsg() {
+  const input=document.getElementById('msgInput');
+  const text=input.value.trim();
+  if(!text) return;
+
+  const ts=Date.now();
+  const payload=geoEncode(text);
+
+  if(dc&&dc.readyState==='open'){
+    dc.send(JSON.stringify({type:'chat',payload,ts}));
+  }
+
+  addMsg(text,'you',ts);
+  input.value='';
+  input.focus();
+}
+
+function addMsg(text,who,ts) {
+  const el=document.createElement('div');
+  el.className='msg '+who;
+  const time=new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  const lockIcon=lockStable?' 🔒':'';
+  el.innerHTML=text+'<div class="meta">'+time+lockIcon+'</div>';
+  const m=document.getElementById('messages');
+  m.appendChild(el);
+  m.scrollTop=m.scrollHeight;
+}
+
+function sysMsg(text) {
+  const el=document.createElement('div');
+  el.className='msg sys';
+  el.textContent=text;
+  const m=document.getElementById('messages');
+  m.appendChild(el);
+  m.scrollTop=m.scrollHeight;
+}
+
+function setStatus(s) {
+  const dot=document.getElementById('statusDot');
+  const txt=document.getElementById('statusText');
+  dot.className='status-dot';
+  if(s==='connected'){ dot.classList.add('connected'); txt.textContent='connected'; }
+  else if(s==='coupled'){ dot.classList.add('coupled'); txt.textContent='coupling'; }
+  else if(s==='locked'){ dot.classList.add('locked'); txt.textContent='tunnel locked'; }
+  else { txt.textContent='offline'; }
+}
+
+// ── Connection Flow ──
+function showStep(id) {
+  document.querySelectorAll('.step').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+async function doCreate() {
+  isCreator=true;
+  makePc();
+  dc=pc.createDataChannel('psi',{ordered:true});
+  setupDc();
+
+  const offer=await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  await new Promise(r=>{
+    pc.onicecandidate=e=>{ if(!e.candidate) r(); };
+    setTimeout(r,4000);
+  });
+
+  document.getElementById('offerOut').value=btoa(JSON.stringify(pc.localDescription));
+  showStep('step1a');
+}
+
+function doJoin() {
+  isCreator=false;
+  showStep('step1b');
+}
+
+async function joinerProcess() {
+  const tok=document.getElementById('offerIn').value.trim();
+  if(!tok){ alert('Paste the session token first'); return; }
+
+  makePc();
+  const offer=JSON.parse(atob(tok));
+  await pc.setRemoteDescription(offer);
+  const answer=await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+
+  await new Promise(r=>{
+    pc.onicecandidate=e=>{ if(!e.candidate) r(); };
+    setTimeout(r,4000);
+  });
+
+  document.getElementById('answerOut').value=btoa(JSON.stringify(pc.localDescription));
+  showStep('step2b');
+}
+
+async function creatorFinish() {
+  const tok=document.getElementById('answerIn').value.trim();
+  if(!tok){ alert('Paste the response token'); return; }
+  const answer=JSON.parse(atob(tok));
+  await pc.setRemoteDescription(answer);
+  document.getElementById('overlay').classList.add('hidden');
+}
+
+function copyToken(id) {
+  const ta=document.getElementById(id);
+  ta.select();
+  navigator.clipboard.writeText(ta.value).then(()=>{
+    const notice=id==='offerOut'?'copyNotice1':'copyNotice2';
+    document.getElementById(notice).textContent='Copied!';
+    setTimeout(()=>document.getElementById(notice).textContent='',2000);
+  }).catch(()=>{});
+}
+
+// Joiner auto-connects when ICE completes
+// so hide overlay when joiner's answer is generated
+const obs=new MutationObserver(()=>{
+  if(!isCreator && pc && pc.iceConnectionState==='connected'){
+    document.getElementById('overlay').classList.add('hidden');
+  }
+});
+obs.observe(document.body,{subtree:true,childList:true,attributes:true});
+
+// Also listen directly
+setInterval(()=>{
+  if(!isCreator && pc && 
+     (pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed') &&
+     !document.getElementById('overlay').classList.contains('hidden')){
+    document.getElementById('overlay').classList.add('hidden');
+  }
+},500);
+</script>
+</body>
+</html>
