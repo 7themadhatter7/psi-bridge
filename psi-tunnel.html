@@ -21,6 +21,14 @@ body{display:flex;flex-direction:column}
 .topbar .status{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px}
 .status-dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0}
 .status-dot.live{background:var(--accent)}
+.status-dot.coupled{background:var(--warn)}
+
+.coupling-bar{display:none;padding:5px 14px;border-bottom:1px solid var(--border);flex-shrink:0;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim)}
+.coupling-bar.active{display:flex;align-items:center;gap:10px}
+.coupling-track{flex:1;height:3px;background:var(--border);border-radius:2px;overflow:hidden}
+.coupling-fill{height:100%;width:0%;background:var(--dim);border-radius:2px;transition:width 0.5s,background 0.3s}
+.coupling-fill.coupled{background:var(--warn)}
+.coupling-fill.locked{background:var(--accent)}
 
 .messages{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:6px;-webkit-overflow-scrolling:touch}
 .msg{max-width:82%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45;word-wrap:break-word}
@@ -37,54 +45,32 @@ body{display:flex;flex-direction:column}
 .input-area button:active{opacity:0.8}
 .input-area button:disabled{opacity:0.3;cursor:default}
 
-/* Overlay */
-.overlay{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;padding:0;overflow-y:auto}
+.overlay{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;overflow-y:auto}
 .overlay.hidden{display:none}
-.ov-inner{width:100%;max-width:440px;margin:0 auto;padding:20px 20px 40px}
-.ov-header{text-align:center;padding:24px 0 20px}
-.ov-header h1{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:500;letter-spacing:3px;color:var(--accent)}
-.ov-header .sub{font-size:12px;color:var(--dim);margin-top:4px}
-
-.step{display:none}
-.step.active{display:block}
-.step h2{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;letter-spacing:2px;color:var(--text);margin:18px 0 8px}
-.step p{font-size:13px;color:var(--dim);line-height:1.5;margin-bottom:10px}
-
-.action-btn{
+.connect-box{width:100%;max-width:380px;text-align:center}
+.connect-box h1{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:500;letter-spacing:3px;color:var(--accent);margin-bottom:6px}
+.connect-box .sub{font-size:12px;color:var(--dim);margin-bottom:24px}
+.connect-box label{display:block;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--dim);margin-bottom:8px;text-align:left}
+.port-input{
+  width:100%;background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:14px;color:var(--accent);
+  font-family:'JetBrains Mono',monospace;font-size:16px;font-weight:500;
+  text-align:center;outline:none;margin-bottom:14px;
+}
+.port-input:focus{border-color:var(--accent)}
+.connect-btn{
   width:100%;padding:15px;border-radius:10px;border:none;
   background:var(--accent);color:var(--bg);
   font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;
-  letter-spacing:1px;cursor:pointer;margin-top:8px;
-}
-.action-btn:active{opacity:0.8}
-.action-btn:disabled{opacity:0.35;cursor:default}
-.action-btn.secondary{background:var(--surface);color:var(--text);border:1px solid var(--border)}
-
-.btns{display:flex;gap:10px;margin-top:14px}
-.btns button{
-  flex:1;padding:14px;border-radius:10px;
-  font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;
   letter-spacing:1px;cursor:pointer;
-  border:1px solid var(--border);background:var(--surface);color:var(--text);
 }
-.btn-primary{background:var(--accent)!important;color:var(--bg)!important;border-color:var(--accent)!important}
-
-.file-drop{
-  border:2px dashed var(--border);border-radius:10px;padding:24px;
-  text-align:center;cursor:pointer;margin:10px 0;
-  font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--dim);
-  transition:border-color 0.2s;
-}
-.file-drop:hover,.file-drop.dragover{border-color:var(--accent);color:var(--accent)}
-.file-drop input{display:none}
-
+.connect-btn:active{opacity:0.8}
 .status-msg{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--warn);text-align:center;margin-top:10px;min-height:18px}
 .status-msg.ok{color:var(--accent)}
-
 .info-box{
   margin-top:20px;padding:14px;
   background:var(--surface);border:1px solid var(--border);border-radius:8px;
-  font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);line-height:1.7;
+  font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);line-height:1.7;text-align:left;
 }
 .info-box strong{color:var(--text);font-weight:500}
 </style>
@@ -98,128 +84,62 @@ body{display:flex;flex-direction:column}
     <span class="status-dot" id="statusDot"></span>
   </div>
 </div>
+
+<div class="coupling-bar" id="couplingBar">
+  <span id="couplingLabel">0.000</span>
+  <div class="coupling-track"><div class="coupling-fill" id="couplingFill"></div></div>
+  <span id="couplingState">—</span>
+</div>
+
 <div class="messages" id="messages"></div>
+
 <div class="input-area">
   <input type="text" id="msgInput" placeholder="Type a message..." disabled onkeydown="if(event.key==='Enter')sendMsg()">
   <button id="sendBtn" onclick="sendMsg()" disabled>Send</button>
 </div>
 
 <div class="overlay" id="overlay">
-<div class="ov-inner">
-  <div class="ov-header">
+  <div class="connect-box">
     <h1>PSI TUNNEL</h1>
-    <div class="sub">Direct connection. No server. No account.</div>
-  </div>
-
-  <!-- Step 0: Choose role -->
-  <div class="step active" id="step0">
-    <h2>ESTABLISH TUNNEL</h2>
-    <p>Two steps: exchange keys, then connect. Keys are small files you send once via email, text, airdrop — however your device shares files.</p>
-    <div class="btns">
-      <button class="btn-primary" onclick="doFirst()">I'M FIRST</button>
-      <button onclick="doSecond()">I'M SECOND</button>
-    </div>
-    <p style="margin-top:16px;font-size:11px;text-align:center">Already have both key files?</p>
-    <button class="action-btn secondary" onclick="doReconnect()">RECONNECT WITH SAVED KEYS</button>
+    <div class="sub">Browser interface to PSI Bridge lattice transport</div>
+    <label>BRIDGE ADDRESS</label>
+    <input class="port-input" type="text" id="bridgeAddr" value="http://localhost:7777"
+           onkeydown="if(event.key==='Enter')connect()">
+    <button class="connect-btn" onclick="connect()">CONNECT TO BRIDGE</button>
+    <div class="status-msg" id="connStatus"></div>
     <div class="info-box">
-      <strong>How it works</strong><br>
-      1. First side generates a key file and sends it<br>
-      2. Second side loads it, generates a response key, sends it back<br>
-      3. Both sides have both keys. Tunnel opens.<br>
-      4. Save the keys. Reconnect anytime.<br><br>
-      <strong>Phone ↔ Phone</strong> — email the key files<br>
-      <strong>PC ↔ PC</strong> — any file transfer<br>
-      <strong>PC ↔ Phone</strong> — same
+      <strong>Prerequisites</strong><br>
+      psi_bridge.py must be running locally.<br>
+      Keys must already be exchanged with peer.<br><br>
+      <strong>What happens</strong><br>
+      Browser → local bridge → lattice → remote lattice → remote bridge<br>
+      No server in between. The lattice IS the transport.<br><br>
+      <strong>Addresses</strong><br>
+      Local: http://localhost:7777<br>
+      SPARKY: http://100.114.190.71:7777<br>
+      ARCY: http://100.127.59.111:7777
     </div>
   </div>
-
-  <!-- Step 1: First — generate and export key -->
-  <div class="step" id="stepFirst1">
-    <h2>1 — YOUR KEY</h2>
-    <p>This is your tunnel key. Send it to the other device.</p>
-    <button class="action-btn" id="btnSaveOffer" disabled>SAVE KEY FILE</button>
-    <button class="action-btn secondary" id="btnShareOffer" style="margin-top:6px" disabled>EMAIL / SHARE KEY</button>
-    <div class="status-msg" id="csFirst1">Generating key...</div>
-
-    <h2>2 — LOAD THEIR RESPONSE</h2>
-    <p>When they send their response key back, load it here.</p>
-    <div class="file-drop" id="dropFirst" onclick="document.getElementById('fileFirst').click()">
-      Drop response key here or tap to browse
-      <input type="file" id="fileFirst" accept=".psi,.json,.txt" onchange="loadAnswerFile(this)">
-    </div>
-    <div class="status-msg" id="csFirst2"></div>
-  </div>
-
-  <!-- Step 2: Second — load their key, generate response -->
-  <div class="step" id="stepSecond1">
-    <h2>1 — LOAD THEIR KEY</h2>
-    <p>Load the key file they sent you.</p>
-    <div class="file-drop" id="dropSecond" onclick="document.getElementById('fileSecond').click()">
-      Drop their key here or tap to browse
-      <input type="file" id="fileSecond" accept=".psi,.json,.txt" onchange="loadOfferFile(this)">
-    </div>
-    <div class="status-msg" id="csSecond1"></div>
-  </div>
-
-  <!-- Step 2b: Second — send response key back -->
-  <div class="step" id="stepSecond2">
-    <h2>2 — YOUR RESPONSE KEY</h2>
-    <p>Send this back to them. Once they load it, the tunnel opens.</p>
-    <button class="action-btn" id="btnSaveAnswer">SAVE RESPONSE KEY</button>
-    <button class="action-btn secondary" id="btnShareAnswer" style="margin-top:6px">EMAIL / SHARE RESPONSE KEY</button>
-    <div class="status-msg" id="csSecond2">Waiting for them to load your key...</div>
-  </div>
-
-  <!-- Step R: Reconnect with saved keys -->
-  <div class="step" id="stepReconnect">
-    <h2>LOAD BOTH KEY FILES</h2>
-    <p>Load your key and their key to reopen the tunnel.</p>
-    <div class="file-drop" id="dropRecon1" onclick="document.getElementById('fileRecon1').click()">
-      Your key file (the one you generated)
-      <input type="file" id="fileRecon1" accept=".psi,.json,.txt" onchange="loadReconFile(this, 'local')">
-    </div>
-    <div class="file-drop" id="dropRecon2" onclick="document.getElementById('fileRecon2').click()" style="margin-top:8px">
-      Their key file (the one they sent you)
-      <input type="file" id="fileRecon2" accept=".psi,.json,.txt" onchange="loadReconFile(this, 'remote')">
-    </div>
-    <button class="action-btn" id="btnReconnect" onclick="executeReconnect()" disabled>OPEN TUNNEL</button>
-    <div class="status-msg" id="csRecon"></div>
-  </div>
-
-</div>
 </div>
 
 <script>
 // ══════════════════════════════════════════════════════════════
-// PSI TUNNEL v2.0 — Key exchange via file transfer
-// WebRTC signaling embedded in key files.
-// Exchange keys via email, text, airdrop, bluetooth — 
-// however your device shares files.
+// PSI TUNNEL v2.0 — Browser UI for PSI Bridge lattice transport
+// Talks to local psi_bridge.py via HTTP.
+// The lattice does the communication. Browser just reads/writes.
 // Ghost in the Machine Labs
 // ══════════════════════════════════════════════════════════════
 
-let pc = null, dc = null;
-
-const ICE = { iceServers: [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' }
-]};
-
-// ── State ──
-let myOffer = null;   // stored for reconnect
-let myAnswer = null;
-
-// ── UI ──
-function showStep(id) {
-  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-}
+let bridgeUrl = '';
+let pollTimer = null;
+let couplingTimer = null;
 
 function setStatus(s) {
   const dot = document.getElementById('statusDot');
   const txt = document.getElementById('statusText');
   dot.className = 'status-dot';
-  if (s === 'live') { dot.classList.add('live'); txt.textContent = 'connected'; }
+  if (s === 'live')    { dot.classList.add('live');    txt.textContent = 'tunnel open'; }
+  else if (s === 'coupled') { dot.classList.add('coupled'); txt.textContent = 'coupled'; }
   else txt.textContent = s || 'offline';
 }
 
@@ -239,313 +159,138 @@ function addMsg(text, who) {
   m.appendChild(el); m.scrollTop = m.scrollHeight;
 }
 
-function goLive() {
-  document.getElementById('overlay').classList.add('hidden');
-  setStatus('live');
-  sysMsg('⚡ Tunnel open — direct peer-to-peer');
-  sysMsg('No server. No relay. This connection is yours.');
-  document.getElementById('msgInput').disabled = false;
-  document.getElementById('sendBtn').disabled = false;
-  document.getElementById('msgInput').focus();
+// ── Connect to local bridge ──
+async function connect() {
+  bridgeUrl = document.getElementById('bridgeAddr').value.trim().replace(/\/+$/, '');
+  const status = document.getElementById('connStatus');
+  status.textContent = 'Connecting...';
+  status.classList.remove('ok');
+
+  try {
+    const res = await fetch(bridgeUrl + '/health', { mode: 'cors' });
+    const data = await res.json();
+
+    if (data.status !== 'online') {
+      status.textContent = 'Bridge responded but not online';
+      return;
+    }
+
+    status.textContent = 'Connected to ' + data.name;
+    status.classList.add('ok');
+
+    // Check coupling
+    const cRes = await fetch(bridgeUrl + '/coupling');
+    const cData = await cRes.json();
+    const coupled = cData.current && cData.current.coupled;
+    const locked = cData.current && cData.current.lock_stable;
+
+    setTimeout(() => {
+      document.getElementById('overlay').classList.add('hidden');
+      if (locked) {
+        setStatus('live');
+        sysMsg('⚡ Tunnel open — lattice locked with peer');
+      } else if (coupled) {
+        setStatus('coupled');
+        sysMsg('🔗 Coupled with peer — locking...');
+      } else {
+        setStatus('coupled');
+        sysMsg('📡 Bridge online — scanning for peer');
+      }
+      sysMsg('Node: ' + data.name + ' · Gen: ' + data.local_gen);
+
+      document.getElementById('msgInput').disabled = false;
+      document.getElementById('sendBtn').disabled = false;
+      document.getElementById('msgInput').focus();
+
+      // Start polling for messages and coupling state
+      startPolling();
+      startCouplingMonitor();
+    }, 300);
+
+  } catch(e) {
+    console.error('[PSI]', e);
+    status.textContent = 'Cannot reach bridge — is psi_bridge.py running?';
+  }
 }
 
-function sendMsg() {
+// ── Poll for incoming messages ──
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(bridgeUrl + '/messages');
+      const data = await res.json();
+      if (data.messages && data.messages.length) {
+        for (const msg of data.messages) {
+          addMsg(msg.text || JSON.stringify(msg), 'them');
+        }
+      }
+    } catch(e) {
+      // Bridge unreachable — don't spam errors
+    }
+  }, 500); // 2Hz poll
+}
+
+// ── Monitor coupling state ──
+function startCouplingMonitor() {
+  const bar = document.getElementById('couplingBar');
+  bar.classList.add('active');
+
+  if (couplingTimer) clearInterval(couplingTimer);
+  couplingTimer = setInterval(async () => {
+    try {
+      const res = await fetch(bridgeUrl + '/coupling');
+      const data = await res.json();
+      const c = data.current || {};
+
+      const fill = document.getElementById('couplingFill');
+      const label = document.getElementById('couplingLabel');
+      const state = document.getElementById('couplingState');
+
+      const sim = c.similarity || 0;
+      fill.style.width = (Math.max(0, sim) * 100) + '%';
+      label.textContent = sim.toFixed(4);
+
+      fill.classList.remove('coupled', 'locked');
+      if (c.lock_stable) {
+        fill.classList.add('locked'); state.textContent = 'LOCKED';
+        setStatus('live');
+      } else if (c.locked) {
+        fill.classList.add('locked'); state.textContent = 'LOCKING';
+        setStatus('coupled');
+      } else if (c.coupled) {
+        fill.classList.add('coupled'); state.textContent = 'COUPLED';
+        setStatus('coupled');
+      } else {
+        state.textContent = 'scanning';
+      }
+    } catch(e) {}
+  }, 2000); // every 2s
+}
+
+// ── Send message ──
+async function sendMsg() {
   const input = document.getElementById('msgInput');
   const text = input.value.trim();
-  if (!text || !dc || dc.readyState !== 'open') return;
-  dc.send(JSON.stringify({ t: 'c', d: text }));
-  addMsg(text, 'you');
-  input.value = ''; input.focus();
-}
+  if (!text || !bridgeUrl) return;
 
-function setupDC() {
-  dc.binaryType = 'arraybuffer';
-  dc.onmessage = e => {
-    try {
-      const m = JSON.parse(e.data);
-      if (m.t === 'c') addMsg(m.d, 'them');
-    } catch(err) {}
-  };
-  dc.onopen = () => goLive();
-  dc.onclose = () => {
-    setStatus('offline'); sysMsg('Tunnel closed.');
-    document.getElementById('msgInput').disabled = true;
-    document.getElementById('sendBtn').disabled = true;
-  };
-}
-
-// ── File save/share helpers ──
-function saveFile(data, filename) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function shareFile(data, filename) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const file = new File([blob], filename, { type: 'application/json' });
-  if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-    navigator.share({
-      title: 'PSI Tunnel Key',
-      text: 'PSI Tunnel key file — load this in PSI Tunnel to connect',
-      files: [file]
-    }).catch(() => {});
-  } else if (navigator.share) {
-    // Fallback: share as text
-    navigator.share({
-      title: 'PSI Tunnel Key',
-      text: JSON.stringify(data)
-    }).catch(() => {});
-  } else {
-    saveFile(data, filename);
-  }
-}
-
-function readFile(fileInput) {
-  return new Promise((resolve, reject) => {
-    const file = fileInput.files[0];
-    if (!file) return reject('No file selected');
-    const reader = new FileReader();
-    reader.onload = () => {
-      try { resolve(JSON.parse(reader.result)); }
-      catch(e) { reject('Invalid key file'); }
-    };
-    reader.onerror = () => reject('Could not read file');
-    reader.readAsText(file);
-  });
-}
-
-// ── Drag and drop ──
-document.querySelectorAll('.file-drop').forEach(el => {
-  el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('dragover'); });
-  el.addEventListener('dragleave', () => el.classList.remove('dragover'));
-  el.addEventListener('drop', e => {
-    e.preventDefault(); el.classList.remove('dragover');
-    const input = el.querySelector('input[type=file]');
-    if (e.dataTransfer.files.length && input) {
-      input.files = e.dataTransfer.files;
-      input.dispatchEvent(new Event('change'));
-    }
-  });
-});
-
-// ══════════════════════════════════════════════════════════════
-// I'M FIRST — generate offer key, wait for answer key
-// ══════════════════════════════════════════════════════════════
-
-async function doFirst() {
-  showStep('stepFirst1');
-  document.getElementById('csFirst1').textContent = 'Generating key (gathering network routes)...';
-
-  if (pc) try { pc.close(); } catch(e) {}
-  pc = new RTCPeerConnection(ICE);
-  dc = pc.createDataChannel('psi', { ordered: true });
-  setupDC();
-
-  pc.oniceconnectionstatechange = () => {
-    const s = pc.iceConnectionState;
-    if (s === 'connected' || s === 'completed') setStatus('live');
-  };
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-
-  await new Promise(resolve => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    pc.onicegatheringstatechange = () => {
-      if (pc.iceGatheringState === 'complete') resolve();
-    };
-    setTimeout(resolve, 8000);
-  });
-
-  myOffer = {
-    psi: 'tunnel-key',
-    role: 'offer',
-    sdp: pc.localDescription.sdp,
-    ts: Date.now()
-  };
-
-  const btnSave = document.getElementById('btnSaveOffer');
-  const btnShare = document.getElementById('btnShareOffer');
-  btnSave.disabled = false;
-  btnShare.disabled = false;
-  btnSave.onclick = () => saveFile(myOffer, 'psi-tunnel-key.psi');
-  btnShare.onclick = () => shareFile(myOffer, 'psi-tunnel-key.psi');
-
-  document.getElementById('csFirst1').textContent = 'Key ready. Save it and send to the other device.';
-  document.getElementById('csFirst1').classList.add('ok');
-}
-
-async function loadAnswerFile(input) {
   try {
-    const data = await readFile(input);
-    if (data.role !== 'answer') {
-      document.getElementById('csFirst2').textContent = 'Wrong file — this is not a response key';
-      return;
-    }
-    document.getElementById('csFirst2').textContent = 'Loading response key...';
-    document.getElementById('csFirst2').classList.add('ok');
-
-    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
-    document.getElementById('csFirst2').textContent = 'Keys matched — opening tunnel...';
-
-    setTimeout(() => {
-      if (!dc || dc.readyState !== 'open') {
-        document.getElementById('csFirst2').textContent = 'Tunnel slow — both devices need to be online';
-        document.getElementById('csFirst2').classList.remove('ok');
-      }
-    }, 15000);
-  } catch(e) {
-    document.getElementById('csFirst2').textContent = typeof e === 'string' ? e : 'Could not read key file';
-  }
-}
-
-// ══════════════════════════════════════════════════════════════
-// I'M SECOND — load offer key, generate answer key
-// ══════════════════════════════════════════════════════════════
-
-function doSecond() { showStep('stepSecond1'); }
-
-async function loadOfferFile(input) {
-  try {
-    const data = await readFile(input);
-    if (data.role !== 'offer') {
-      document.getElementById('csSecond1').textContent = 'Wrong file — this is not the initial key';
-      return;
-    }
-    document.getElementById('csSecond1').textContent = 'Generating response key...';
-
-    if (pc) try { pc.close(); } catch(e) {}
-    pc = new RTCPeerConnection(ICE);
-    pc.ondatachannel = e => { dc = e.channel; setupDC(); };
-
-    pc.oniceconnectionstatechange = () => {
-      const s = pc.iceConnectionState;
-      if (s === 'connected' || s === 'completed') setStatus('live');
-    };
-
-    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-
-    await new Promise(resolve => {
-      if (pc.iceGatheringState === 'complete') return resolve();
-      pc.onicegatheringstatechange = () => {
-        if (pc.iceGatheringState === 'complete') resolve();
-      };
-      setTimeout(resolve, 8000);
+    await fetch(bridgeUrl + '/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
     });
-
-    myAnswer = {
-      psi: 'tunnel-key',
-      role: 'answer',
-      sdp: pc.localDescription.sdp,
-      ts: Date.now()
-    };
-
-    showStep('stepSecond2');
-    const btnSave = document.getElementById('btnSaveAnswer');
-    const btnShare = document.getElementById('btnShareAnswer');
-    btnSave.onclick = () => saveFile(myAnswer, 'psi-tunnel-response.psi');
-    btnShare.onclick = () => shareFile(myAnswer, 'psi-tunnel-response.psi');
-
-    document.getElementById('csSecond2').textContent = 'Response key ready. Save it and send back. Tunnel opens when they load it.';
-    document.getElementById('csSecond2').classList.add('ok');
-
+    addMsg(text, 'you');
+    input.value = ''; input.focus();
   } catch(e) {
-    console.error('[PSI]', e);
-    document.getElementById('csSecond1').textContent = typeof e === 'string' ? e : 'Could not read key file';
-  }
-}
-
-// ══════════════════════════════════════════════════════════════
-// RECONNECT — load both saved key files
-// ══════════════════════════════════════════════════════════════
-
-let reconLocal = null, reconRemote = null;
-
-function doReconnect() { showStep('stepReconnect'); }
-
-async function loadReconFile(input, which) {
-  try {
-    const data = await readFile(input);
-    if (which === 'local') reconLocal = data;
-    else reconRemote = data;
-
-    if (reconLocal && reconRemote) {
-      document.getElementById('btnReconnect').disabled = false;
-      document.getElementById('csRecon').textContent = 'Both keys loaded. Ready to connect.';
-      document.getElementById('csRecon').classList.add('ok');
-    } else {
-      document.getElementById('csRecon').textContent = (which === 'local' ? 'Your' : 'Their') + ' key loaded. Load the other one.';
-    }
-  } catch(e) {
-    document.getElementById('csRecon').textContent = typeof e === 'string' ? e : 'Could not read file';
-  }
-}
-
-async function executeReconnect() {
-  if (!reconLocal || !reconRemote) return;
-
-  try {
-    document.getElementById('csRecon').textContent = 'Opening tunnel...';
-    if (pc) try { pc.close(); } catch(e) {}
-
-    const isCreator = reconLocal.role === 'offer';
-    const offer = isCreator ? reconLocal : reconRemote;
-    const answer = isCreator ? reconRemote : reconLocal;
-
-    pc = new RTCPeerConnection(ICE);
-
-    if (isCreator) {
-      dc = pc.createDataChannel('psi', { ordered: true });
-      setupDC();
-    } else {
-      pc.ondatachannel = e => { dc = e.channel; setupDC(); };
-    }
-
-    pc.oniceconnectionstatechange = () => {
-      const s = pc.iceConnectionState;
-      if (s === 'connected' || s === 'completed') setStatus('live');
-      if (s === 'failed') {
-        document.getElementById('csRecon').textContent = 'Connection failed — both devices must be online with same network conditions as original key exchange';
-        document.getElementById('csRecon').classList.remove('ok');
-      }
-    };
-
-    await pc.setLocalDescription(new RTCSessionDescription({
-      type: isCreator ? 'offer' : 'answer',
-      sdp: (isCreator ? offer : answer).sdp
-    }));
-
-    await pc.setRemoteDescription(new RTCSessionDescription({
-      type: isCreator ? 'answer' : 'offer',
-      sdp: (isCreator ? answer : offer).sdp
-    }));
-
-    document.getElementById('csRecon').textContent = 'Keys matched — opening tunnel...';
-
-    setTimeout(() => {
-      if (!dc || dc.readyState !== 'open') {
-        document.getElementById('csRecon').textContent = 'Tunnel slow — keys may have expired (IP/network changed). Generate new keys.';
-        document.getElementById('csRecon').classList.remove('ok');
-      }
-    }, 15000);
-
-  } catch(e) {
-    console.error('[PSI]', e);
-    document.getElementById('csRecon').textContent = 'Error — key files may be incompatible or corrupted';
+    sysMsg('Send failed — bridge unreachable');
   }
 }
 
 // Cleanup
 window.addEventListener('beforeunload', () => {
-  if (dc) try { dc.close(); } catch(e) {}
-  if (pc) try { pc.close(); } catch(e) {}
+  if (pollTimer) clearInterval(pollTimer);
+  if (couplingTimer) clearInterval(couplingTimer);
 });
 </script>
 </body>
