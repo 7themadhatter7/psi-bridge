@@ -113,8 +113,8 @@ textarea:focus{outline:none;border-color:var(--accent)}
     <h2>CONNECT TWO DEVICES</h2>
     <p>One side starts, the other joins. Exchange short keys via text, email, airdrop — anything. One time only.</p>
     <div class="btns">
-      <button class="btn-primary" onclick="doCreate()">I'M FIRST</button>
-      <button onclick="doJoin()">I'M SECOND</button>
+      <button class="btn-primary" id="btnFirst" onclick="this.disabled=true;doCreate()">I'M FIRST</button>
+      <button id="btnSecond" onclick="this.disabled=true;doJoin()">I'M SECOND</button>
     </div>
     <div class="info-box">
       <strong>Phone ↔ Phone</strong> — send this file as attachment. Both open.<br>
@@ -281,58 +281,76 @@ function tokenToSDP(token) {
 // CREATOR
 // ══════════════════════════════════════════════════════════════
 
+let creatorReady = false;
+let keysExchanged = false;
+
 async function doCreate() {
   showStep('step1a');
-  document.getElementById('cs1a').textContent = 'Generating key...';
+  creatorReady = false;
+  keysExchanged = false;
+  document.getElementById('offerOut').value = '';
+  document.getElementById('answerIn').value = '';
+  document.getElementById('cs1a').textContent = 'Generating key (gathering network routes)...';
+
+  // Clean up any prior attempt
+  if (pc) try { pc.close(); } catch(e) {}
+  pc = null; dc = null;
 
   pc = new RTCPeerConnection(ICE);
   dc = pc.createDataChannel('psi', { ordered: true });
   setupDC();
 
+  // Only show ICE errors AFTER keys have been exchanged
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
     if (s === 'connected' || s === 'completed') setStatus('live');
-    if (s === 'failed' || s === 'disconnected') {
-      document.getElementById('cs1a').textContent = 'Connection failed — check network';
+    if (keysExchanged && (s === 'failed')) {
+      document.getElementById('cs1a').textContent = 'Connection failed — devices may not be able to reach each other directly';
     }
   };
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  // Wait for ICE gathering to complete (or timeout)
+  // Collect ICE candidates into the local description
   await new Promise(resolve => {
     if (pc.iceGatheringState === 'complete') return resolve();
-    const check = () => {
-      if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === 'complete') resolve();
     };
-    pc.onicegatheringstatechange = check;
-    setTimeout(resolve, 6000); // 6s max wait for STUN
+    // Timeout: use what we have after 8s (host candidates at minimum)
+    setTimeout(resolve, 8000);
   });
 
   const token = sdpToToken(pc.localDescription.sdp);
   document.getElementById('offerOut').value = token;
-  document.getElementById('cs1a').textContent = 'Send this key → paste their response below';
+  document.getElementById('cs1a').textContent = 'Key ready. Send it to the other device ↑ then paste their response ↓';
+  creatorReady = true;
 }
 
 async function creatorFinish() {
+  if (!creatorReady || !pc) {
+    document.getElementById('cs1a').textContent = 'Key not ready yet — wait for generation to finish';
+    return;
+  }
   const raw = document.getElementById('answerIn').value.trim();
-  if (!raw) { document.getElementById('cs1a').textContent = 'Paste their response key'; return; }
+  if (!raw) { document.getElementById('cs1a').textContent = 'Paste their response key first'; return; }
 
   try {
+    keysExchanged = true;
     document.getElementById('cs1a').textContent = 'Connecting...';
     const sdp = tokenToSDP(raw);
     await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
-    document.getElementById('cs1a').textContent = 'Waiting for tunnel...';
+    document.getElementById('cs1a').textContent = 'Keys exchanged — opening tunnel...';
 
     setTimeout(() => {
       if (!dc || dc.readyState !== 'open') {
-        document.getElementById('cs1a').textContent = 'Slow — both devices need network access to each other';
+        document.getElementById('cs1a').textContent = 'Still trying — both devices need network visibility to each other';
       }
     }, 15000);
   } catch(e) {
-    console.error('[PSI]', e);
-    document.getElementById('cs1a').textContent = 'Invalid key — try again';
+    console.error('[PSI] creatorFinish error:', e);
+    document.getElementById('cs1a').textContent = 'Bad key — make sure you pasted the RESPONSE key, not your own';
   }
 }
 
@@ -349,6 +367,10 @@ async function joinerProcess() {
   try {
     document.getElementById('cs1b').textContent = 'Processing...';
 
+    // Clean up any prior attempt
+    if (pc) try { pc.close(); } catch(e) {}
+    pc = null; dc = null;
+
     pc = new RTCPeerConnection(ICE);
     pc.ondatachannel = e => { dc = e.channel; setupDC(); };
 
@@ -356,7 +378,7 @@ async function joinerProcess() {
       const s = pc.iceConnectionState;
       if (s === 'connected' || s === 'completed') setStatus('live');
       if (s === 'failed') {
-        document.getElementById('cs2b').textContent = 'Connection failed — check network';
+        document.getElementById('cs2b').textContent = 'Connection failed — devices may not be able to reach each other directly';
       }
     };
 
@@ -366,23 +388,23 @@ async function joinerProcess() {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    // Wait for ICE
+    // Wait for ICE gathering
     await new Promise(resolve => {
       if (pc.iceGatheringState === 'complete') return resolve();
       pc.onicegatheringstatechange = () => {
         if (pc.iceGatheringState === 'complete') resolve();
       };
-      setTimeout(resolve, 6000);
+      setTimeout(resolve, 8000);
     });
 
     const token = sdpToToken(pc.localDescription.sdp);
     document.getElementById('answerOut').value = token;
     showStep('step2b');
-    document.getElementById('cs2b').textContent = 'Send this key back → tunnel opens when they paste it';
+    document.getElementById('cs2b').textContent = 'Key ready. Send this back → tunnel opens when they paste it.';
 
   } catch(e) {
-    console.error('[PSI]', e);
-    document.getElementById('cs1b').textContent = 'Invalid key — try again';
+    console.error('[PSI] joinerProcess error:', e);
+    document.getElementById('cs1b').textContent = 'Bad key — make sure you pasted their key, not yours';
   }
 }
 
