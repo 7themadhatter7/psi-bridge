@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PSI Tunnel</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Outfit:wght@300;400;600&display=swap');
+:root {
+  --bg:#08080c; --surface:#101018; --border:#1a1a28;
+  --text:#d8d8e0; --dim:#555568; --accent:#00dd77;
+  --you:rgba(0,221,119,0.08); --you-border:rgba(0,221,119,0.2);
+  --them:#161620; --them-border:#222234; --warn:#ddaa00;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;overflow:hidden;font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text)}
+body{display:flex;flex-direction:column}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.topbar .title{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:500;letter-spacing:2px;color:var(--accent)}
+.topbar .status{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0}
+.status-dot.live{background:var(--accent)}
+
+.messages{flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:6px;-webkit-overflow-scrolling:touch}
+.msg{max-width:82%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45;word-wrap:break-word}
+.msg.you{align-self:flex-end;background:var(--you);border:1px solid var(--you-border);border-bottom-right-radius:4px}
+.msg.them{align-self:flex-start;background:var(--them);border:1px solid var(--them-border);border-bottom-left-radius:4px}
+.msg.sys{align-self:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);padding:4px 10px;max-width:100%}
+.msg .meta{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--dim);margin-top:3px}
+
+.input-area{display:flex;gap:8px;padding:10px 14px;padding-bottom:max(10px,env(safe-area-inset-bottom));border-top:1px solid var(--border);flex-shrink:0;background:var(--surface)}
+.input-area input{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--text);font-family:'Outfit',sans-serif;font-size:15px;outline:none}
+.input-area input:focus{border-color:var(--accent)}
+.input-area input::placeholder{color:var(--dim)}
+.input-area button{padding:10px 18px;background:var(--accent);color:var(--bg);border:none;border-radius:10px;font-family:'Outfit',sans-serif;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap}
+.input-area button:active{opacity:0.8}
+.input-area button:disabled{opacity:0.3;cursor:default}
+
+.overlay{position:fixed;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;padding:0;overflow-y:auto}
+.overlay.hidden{display:none}
+.ov-inner{width:100%;max-width:440px;margin:0 auto;padding:20px 20px 40px}
+
+.ov-header{text-align:center;padding:24px 0 20px}
+.ov-header h1{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:500;letter-spacing:3px;color:var(--accent)}
+.ov-header .sub{font-size:12px;color:var(--dim);margin-top:4px}
+
+.step{display:none}
+.step.active{display:block}
+.step h2{font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;letter-spacing:2px;color:var(--text);margin:16px 0 8px}
+.step p{font-size:13px;color:var(--dim);line-height:1.5;margin-bottom:10px}
+
+.btns{display:flex;gap:10px;margin-top:14px}
+.btns button{
+  flex:1;padding:14px;border-radius:10px;
+  font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;
+  letter-spacing:1px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);
+}
+.btns button:active{opacity:0.8}
+.btn-primary{background:var(--accent)!important;color:var(--bg)!important;border-color:var(--accent)!important}
+
+textarea{
+  width:100%;height:64px;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:10px;color:var(--text);
+  font-family:'JetBrains Mono',monospace;font-size:9px;
+  resize:none;word-break:break-all;line-height:1.4;
+}
+textarea:focus{outline:none;border-color:var(--accent)}
+
+.share-row{display:flex;gap:8px;margin-top:8px}
+.share-row button{
+  flex:1;padding:10px 8px;border-radius:8px;border:1px solid var(--border);
+  background:var(--surface);color:var(--dim);cursor:pointer;
+  font-family:'JetBrains Mono',monospace;font-size:10px;
+}
+.share-row button:active{opacity:0.7}
+
+.copy-notice{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--accent);text-align:center;margin-top:4px;min-height:16px}
+.conn-status{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--warn);text-align:center;margin-top:8px;min-height:16px}
+
+.info-box{
+  margin-top:20px;padding:14px;
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--dim);line-height:1.7;
+}
+.info-box strong{color:var(--text);font-weight:500}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="title">PSI TUNNEL</div>
+  <div class="status">
+    <span id="statusText">offline</span>
+    <span class="status-dot" id="statusDot"></span>
+  </div>
+</div>
+<div class="messages" id="messages"></div>
+<div class="input-area">
+  <input type="text" id="msgInput" placeholder="Type a message..." disabled onkeydown="if(event.key==='Enter')sendMsg()">
+  <button id="sendBtn" onclick="sendMsg()" disabled>Send</button>
+</div>
+
+<div class="overlay" id="overlay">
+<div class="ov-inner">
+  <div class="ov-header">
+    <h1>PSI TUNNEL</h1>
+    <div class="sub">Direct connection. No server. No account.</div>
+  </div>
+
+  <div class="step active" id="step0">
+    <h2>CONNECT TWO DEVICES</h2>
+    <p>One side starts, the other joins. Exchange short keys via text, email, airdrop — anything. One time only.</p>
+    <div class="btns">
+      <button class="btn-primary" onclick="doCreate()">I'M FIRST</button>
+      <button onclick="doJoin()">I'M SECOND</button>
+    </div>
+    <div class="info-box">
+      <strong>Phone ↔ Phone</strong> — send this file as attachment. Both open.<br>
+      <strong>PC ↔ PC</strong> — both open the same HTML file.<br>
+      <strong>PC ↔ Phone</strong> — same file, any combination.<br><br>
+      No app. No account. No relay. Pure peer-to-peer.
+    </div>
+  </div>
+
+  <div class="step" id="step1a">
+    <h2>1 — SEND THIS KEY TO THE OTHER DEVICE</h2>
+    <p>Text it, email it, airdrop it, read it aloud.</p>
+    <textarea id="offerOut" readonly onclick="copyField('offerOut','cn1')"></textarea>
+    <div class="share-row">
+      <button onclick="copyField('offerOut','cn1')">COPY</button>
+      <button onclick="shareField('offerOut')">SHARE</button>
+    </div>
+    <div class="copy-notice" id="cn1"></div>
+    <h2>2 — PASTE THEIR RESPONSE KEY</h2>
+    <p>They'll send one back.</p>
+    <textarea id="answerIn" placeholder="Paste their response key here..."></textarea>
+    <div class="btns">
+      <button class="btn-primary" onclick="creatorFinish()">CONNECT</button>
+    </div>
+    <div class="conn-status" id="cs1a"></div>
+  </div>
+
+  <div class="step" id="step1b">
+    <h2>1 — PASTE THE KEY THEY SENT</h2>
+    <textarea id="offerIn" placeholder="Paste the key here..."></textarea>
+    <div class="btns">
+      <button class="btn-primary" onclick="joinerProcess()">NEXT</button>
+    </div>
+    <div class="conn-status" id="cs1b"></div>
+  </div>
+
+  <div class="step" id="step2b">
+    <h2>2 — SEND THIS BACK TO THEM</h2>
+    <p>Once they paste it, the tunnel opens.</p>
+    <textarea id="answerOut" readonly onclick="copyField('answerOut','cn2')"></textarea>
+    <div class="share-row">
+      <button onclick="copyField('answerOut','cn2')">COPY</button>
+      <button onclick="shareField('answerOut')">SHARE</button>
+    </div>
+    <div class="copy-notice" id="cn2"></div>
+    <div class="conn-status" id="cs2b">Waiting for them to paste your key...</div>
+  </div>
+</div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════
+// PSI TUNNEL v1.0 — Pure WebRTC, zero server
+// Key exchange: copy/paste/share/airdrop
+// Data channel: direct peer-to-peer
+// Ghost in the Machine Labs
+// ══════════════════════════════════════════════════════════════
+
+let pc = null, dc = null;
+
+const ICE = { iceServers: [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' }
+]};
+
+// ── UI ──
+function showStep(id) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function copyField(fid, nid) {
+  const el = document.getElementById(fid);
+  if (!el.value) return;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(el.value).then(() => {
+      document.getElementById(nid).textContent = '✓ Copied';
+      setTimeout(() => document.getElementById(nid).textContent = '', 2000);
+    }).catch(() => { el.select(); document.execCommand('copy'); });
+  } else { el.select(); document.execCommand('copy'); }
+}
+
+function shareField(fid) {
+  const text = document.getElementById(fid).value;
+  if (!text) return;
+  if (navigator.share) navigator.share({ title: 'PSI Tunnel Key', text }).catch(() => {});
+  else copyField(fid, fid === 'offerOut' ? 'cn1' : 'cn2');
+}
+
+function setStatus(s) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  dot.className = 'status-dot';
+  if (s === 'live') { dot.classList.add('live'); txt.textContent = 'connected'; }
+  else txt.textContent = s || 'offline';
+}
+
+function sysMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg sys'; el.textContent = text;
+  const m = document.getElementById('messages');
+  m.appendChild(el); m.scrollTop = m.scrollHeight;
+}
+
+function addMsg(text, who) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + who;
+  const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  el.innerHTML = text.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '<div class="meta">' + t + '</div>';
+  const m = document.getElementById('messages');
+  m.appendChild(el); m.scrollTop = m.scrollHeight;
+}
+
+function goLive() {
+  document.getElementById('overlay').classList.add('hidden');
+  setStatus('live');
+  sysMsg('⚡ Tunnel open — direct peer-to-peer');
+  sysMsg('No server in the middle. No relay. This is yours.');
+  document.getElementById('msgInput').disabled = false;
+  document.getElementById('sendBtn').disabled = false;
+  document.getElementById('msgInput').focus();
+}
+
+function sendMsg() {
+  const input = document.getElementById('msgInput');
+  const text = input.value.trim();
+  if (!text || !dc || dc.readyState !== 'open') return;
+  dc.send(JSON.stringify({ t: 'c', d: text }));
+  addMsg(text, 'you');
+  input.value = ''; input.focus();
+}
+
+function setupDC() {
+  dc.binaryType = 'arraybuffer';
+  dc.onmessage = e => {
+    try {
+      const m = JSON.parse(e.data);
+      if (m.t === 'c') addMsg(m.d, 'them');
+    } catch(err) {}
+  };
+  dc.onopen = () => goLive();
+  dc.onclose = () => {
+    setStatus('offline'); sysMsg('Tunnel closed.');
+    document.getElementById('msgInput').disabled = true;
+    document.getElementById('sendBtn').disabled = true;
+  };
+}
+
+// ══════════════════════════════════════════════════════════════
+// TOKEN: full SDP base64 — reliable, no reconstruction needed
+// Compact SDP reconstruction is fragile across browsers.
+// Full SDP base64 is ~600 chars. Textable. Reliable.
+// ══════════════════════════════════════════════════════════════
+
+function sdpToToken(sdp) {
+  return btoa(unescape(encodeURIComponent(sdp)));
+}
+
+function tokenToSDP(token) {
+  return decodeURIComponent(escape(atob(token)));
+}
+
+// ══════════════════════════════════════════════════════════════
+// CREATOR
+// ══════════════════════════════════════════════════════════════
+
+async function doCreate() {
+  showStep('step1a');
+  document.getElementById('cs1a').textContent = 'Generating key...';
+
+  pc = new RTCPeerConnection(ICE);
+  dc = pc.createDataChannel('psi', { ordered: true });
+  setupDC();
+
+  pc.oniceconnectionstatechange = () => {
+    const s = pc.iceConnectionState;
+    if (s === 'connected' || s === 'completed') setStatus('live');
+    if (s === 'failed' || s === 'disconnected') {
+      document.getElementById('cs1a').textContent = 'Connection failed — check network';
+    }
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Wait for ICE gathering to complete (or timeout)
+  await new Promise(resolve => {
+    if (pc.iceGatheringState === 'complete') return resolve();
+    const check = () => {
+      if (pc.iceGatheringState === 'complete') { resolve(); return; }
+    };
+    pc.onicegatheringstatechange = check;
+    setTimeout(resolve, 6000); // 6s max wait for STUN
+  });
+
+  const token = sdpToToken(pc.localDescription.sdp);
+  document.getElementById('offerOut').value = token;
+  document.getElementById('cs1a').textContent = 'Send this key → paste their response below';
+}
+
+async function creatorFinish() {
+  const raw = document.getElementById('answerIn').value.trim();
+  if (!raw) { document.getElementById('cs1a').textContent = 'Paste their response key'; return; }
+
+  try {
+    document.getElementById('cs1a').textContent = 'Connecting...';
+    const sdp = tokenToSDP(raw);
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp }));
+    document.getElementById('cs1a').textContent = 'Waiting for tunnel...';
+
+    setTimeout(() => {
+      if (!dc || dc.readyState !== 'open') {
+        document.getElementById('cs1a').textContent = 'Slow — both devices need network access to each other';
+      }
+    }, 15000);
+  } catch(e) {
+    console.error('[PSI]', e);
+    document.getElementById('cs1a').textContent = 'Invalid key — try again';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// JOINER
+// ══════════════════════════════════════════════════════════════
+
+function doJoin() { showStep('step1b'); }
+
+async function joinerProcess() {
+  const raw = document.getElementById('offerIn').value.trim();
+  if (!raw) { document.getElementById('cs1b').textContent = 'Paste the key they sent'; return; }
+
+  try {
+    document.getElementById('cs1b').textContent = 'Processing...';
+
+    pc = new RTCPeerConnection(ICE);
+    pc.ondatachannel = e => { dc = e.channel; setupDC(); };
+
+    pc.oniceconnectionstatechange = () => {
+      const s = pc.iceConnectionState;
+      if (s === 'connected' || s === 'completed') setStatus('live');
+      if (s === 'failed') {
+        document.getElementById('cs2b').textContent = 'Connection failed — check network';
+      }
+    };
+
+    const sdp = tokenToSDP(raw);
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp }));
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    // Wait for ICE
+    await new Promise(resolve => {
+      if (pc.iceGatheringState === 'complete') return resolve();
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') resolve();
+      };
+      setTimeout(resolve, 6000);
+    });
+
+    const token = sdpToToken(pc.localDescription.sdp);
+    document.getElementById('answerOut').value = token;
+    showStep('step2b');
+    document.getElementById('cs2b').textContent = 'Send this key back → tunnel opens when they paste it';
+
+  } catch(e) {
+    console.error('[PSI]', e);
+    document.getElementById('cs1b').textContent = 'Invalid key — try again';
+  }
+}
+
+// Cleanup
+window.addEventListener('beforeunload', () => {
+  if (dc) try { dc.close(); } catch(e) {}
+  if (pc) try { pc.close(); } catch(e) {}
+});
+</script>
+</body>
+</html>
