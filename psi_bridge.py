@@ -418,6 +418,7 @@ def log(msg: str):
 
 # ════════════════════════════════════════════════════════════════════
 def main():
+    global PSI_PORT
     parser = argparse.ArgumentParser(
         description="PSI Network Bridge — One-time bootstrap for geometric lattice coupling",
         epilog="After stable lock, disconnect the network. Coupling persists.")
@@ -427,7 +428,6 @@ def main():
     parser.add_argument("--substrate-port", type=int, default=11434, help="Local substrate port")
     args = parser.parse_args()
     
-    global PSI_PORT
     PSI_PORT = args.port
     node_name = args.name or socket.gethostname()
     
