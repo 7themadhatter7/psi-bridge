@@ -28,13 +28,6 @@
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
-# Windows encoding fix
-import sys as _sys, io as _io
-if _sys.stdout.encoding and _sys.stdout.encoding.lower() != 'utf-8':
-    _sys.stdout = _io.TextIOWrapper(_sys.stdout.buffer, encoding='utf-8', errors='replace')
-    _sys.stderr = _io.TextIOWrapper(_sys.stderr.buffer, encoding='utf-8', errors='replace')
-
-
 import json
 import time
 import math
@@ -281,12 +274,6 @@ class PSIBridgeNode:
         self.coupling = CouplingEngine()
         self.running = False
         self.last_coupling_result = {}
-        self.outbox = []
-        self.inbox = []
-        self.msg_seq = 0
-        self.outbox = []
-        self.inbox = []
-        self.msg_seq = 0
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         
     def start(self):
@@ -304,11 +291,7 @@ class PSIBridgeNode:
         while self.running:
             try:
                 self.local_state.update_from_substrate(self.substrate_url)
-                state_data = self.local_state.to_dict()
-                if self.outbox:
-                    state_data["msgs"] = list(self.outbox)
-                    self.outbox.clear()
-                payload = json.dumps(state_data).encode()
+                payload = json.dumps(self.local_state.to_dict()).encode()
                 req = urllib.request.Request(
                     f"http://{self.peer_ip}:{PSI_PORT}/state",
                     data=payload, headers={"Content-Type": "application/json"}, method="POST")
@@ -321,18 +304,6 @@ class PSIBridgeNode:
             time.sleep(1.0 / BROADCAST_HZ)
     
     def _handle_incoming_state(self, data: dict):
-        # Extract chat messages from payload
-        if "msgs" in data and data["msgs"]:
-            for msg in data["msgs"]:
-                self.inbox.append(msg)
-            if len(self.inbox) > 500:
-                self.inbox = self.inbox[-500:]
-        # Extract chat messages from payload
-        if "msgs" in data and data["msgs"]:
-            for msg in data["msgs"]:
-                self.inbox.append(msg)
-            if len(self.inbox) > 500:
-                self.inbox = self.inbox[-500:]
         self.remote_state = GeometricState.from_dict(data)
         self.last_coupling_result = self.coupling.compute_coupling(self.local_state, self.remote_state)
         cr = self.last_coupling_result
@@ -368,57 +339,11 @@ class PSIBridgeNode:
                              "persisted_lock": ld,
                              "safe_to_disconnect": node.coupling.lock_stable,
                              "message": "STABLE — disconnect OK" if node.coupling.lock_stable else "bootstrapping — keep connected"})
-                elif self.path == "/messages":
-                    msgs = list(node.inbox)
-                    node.inbox.clear()
-                    self._j({"messages": msgs})
-                elif self.path == "/messages":
-                    msgs = list(node.inbox)
-                    node.inbox.clear()
-                    self._j({"messages": msgs})
                 elif self.path == "/state":
                     self._j(node.local_state.to_dict())
                 else:
-                    self._j({"endpoints": ["GET /health", "GET /coupling", "GET /lock", "GET /state", "GET /messages", "POST /state", "POST /send"]})
-            def do_OPTIONS(self):
-                self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
-            def do_OPTIONS(self):
-                self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                    self._j({"endpoints": ["GET /health", "GET /coupling", "GET /lock", "GET /state", "POST /state"]})
             def do_POST(self):
-                if self.path == "/send":
-                    raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                    try:
-                        msg = json.loads(raw)
-                        node.msg_seq += 1
-                        msg["seq"] = node.msg_seq
-                        msg["ts"] = time.time()
-                        node.outbox.append(msg)
-                        self._j({"queued": True, "seq": node.msg_seq})
-                    except Exception as e:
-                        self._j({"error": str(e)}, 400)
-                    return
-                if self.path == "/send":
-                    raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                    try:
-                        msg = json.loads(raw)
-                        node.msg_seq += 1
-                        msg["seq"] = node.msg_seq
-                        msg["ts"] = time.time()
-                        node.outbox.append(msg)
-                        self._j({"queued": True, "seq": node.msg_seq})
-                    except Exception as e:
-                        self._j({"error": str(e)}, 400)
-                    return
                 if self.path == "/state":
                     raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
                     try:
@@ -432,12 +357,6 @@ class PSIBridgeNode:
                 body = json.dumps(data).encode()
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Allow-Headers", "Content-Type")
                 self.send_header("Content-Length", len(body))
                 self.end_headers()
                 self.wfile.write(body)
@@ -460,7 +379,6 @@ def log(msg: str):
 
 # ════════════════════════════════════════════════════════════════════
 def main():
-    global PSI_PORT
     parser = argparse.ArgumentParser(
         description="PSI Network Bridge — One-time bootstrap for geometric lattice coupling",
         epilog="After stable lock, disconnect the network. Coupling persists.")
@@ -470,6 +388,7 @@ def main():
     parser.add_argument("--substrate-port", type=int, default=11434, help="Local substrate port")
     args = parser.parse_args()
     
+    global PSI_PORT
     PSI_PORT = args.port
     node_name = args.name or socket.gethostname()
     
