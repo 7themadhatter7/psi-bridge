@@ -568,8 +568,10 @@ class LockManager:
                   similarity: float) -> Tuple[str, FrequencyCodec]:
         """Save lock state and generate frequency codec for this peer pair."""
         peer_id = self._peer_id(local_state.fingerprint, remote_state.fingerprint)
+        # Order-independent: sort fingerprints so both sides get the same hash
+        fps = sorted([local_state.fingerprint, remote_state.fingerprint])
         combined_fp = hashlib.sha256(
-            (local_state.fingerprint + remote_state.fingerprint).encode()
+            (fps[0] + fps[1]).encode()
         ).hexdigest()[:16]
         
         lock_data = {
