@@ -811,14 +811,25 @@ class PSIBridgeNode:
         
         # Decode frames — try substrate transport first, fall back to frequency codec
         if "freq_frames" in data:
+            log(f"Received {len(data['freq_frames'])} frame(s) from peer")
             for frame in data["freq_frames"]:
                 decoded = None
                 if self.substrate_transport and self.substrate_transport.ready:
                     decoded = self.substrate_transport.decode_frame(frame)
+                    if decoded:
+                        log(f"  Substrate decoded: {len(decoded)} bytes")
+                    else:
+                        log(f"  Substrate decode FAILED (checksum mismatch)")
                 if decoded is None and self.active_codec:
                     decoded = self.active_codec.decode_frame(frame)
+                    if decoded:
+                        log(f"  Frequency decoded: {len(decoded)} bytes")
+                    else:
+                        log(f"  Frequency decode FAILED")
                 if decoded:
                     self.inbound_buffer.append(decoded)
+                else:
+                    log(f"  Frame lost — no codec could decode")
         
         self.remote_state = GeometricState.from_dict(data)
         self.last_coupling_result = self.coupling.compute_coupling(
