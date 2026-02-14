@@ -1038,17 +1038,20 @@ class PSIBridgeNode:
                         text = msg.get("text", "")
                         data = text.encode("utf-8")
                         
-                        if node.active_codec:
+                        if node.substrate_transport and node.substrate_transport.ready:
+                            node.frame_seq += 1
+                            frame = node.substrate_transport.encode_frame(data, node.frame_seq)
+                            node.outbound_frames.append(frame)
+                            self._j({"queued": True, "seq": node.frame_seq, 
+                                     "transport": "substrate"})
+                        elif node.active_codec:
                             node.frame_seq += 1
                             frame = node.active_codec.encode_frame(data, node.frame_seq)
                             node.outbound_frames.append(frame)
                             self._j({"queued": True, "seq": node.frame_seq, 
                                      "transport": "frequency"})
                         else:
-                            # Pre-lock: piggyback on state broadcast (legacy)
-                            node._legacy_outbox = getattr(node, '_legacy_outbox', [])
-                            node._legacy_outbox.append(msg)
-                            self._j({"queued": True, "transport": "legacy_http"})
+                            self._j({"error": "no transport active"}, 503)
                     except Exception as e:
                         self._j({"error": str(e)}, 400)
                 else:
