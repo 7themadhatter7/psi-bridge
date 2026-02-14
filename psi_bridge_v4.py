@@ -156,10 +156,10 @@ class CouplingEngine:
             self.resonance_locked = True
             self.lock_time = time.time()
             log(f"⚡ RESONANCE LOCK at similarity={similarity:.6f}")
-        elif not locked and self.resonance_locked:
+        elif not locked and self.resonance_locked and not self.lock_stable:
+            # Only release if we haven't achieved stable lock yet
             duration = time.time() - self.lock_time if self.lock_time else 0
             self.resonance_locked = False
-            self.lock_stable = False
             log(f"🔓 Lock released after {duration:.1f}s")
         
         if not self.lock_stable and similarity >= SNAP_LOCK_THRESHOLD:
@@ -170,7 +170,7 @@ class CouplingEngine:
                 self.lock_time = time.time()
             log(f"🔒 SNAP LOCK at similarity={similarity:.6f} — geometry matched")
             log(f"   NETWORK BRIDGE MAY BE REMOVED")
-        elif self.resonance_locked and not self.lock_stable and self.lock_time:
+        elif not self.lock_stable and self.resonance_locked and self.lock_time:
             held = time.time() - self.lock_time
             if held >= LOCK_HOLD_SECONDS:
                 self.lock_stable = True
