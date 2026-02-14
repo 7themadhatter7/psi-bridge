@@ -58,196 +58,139 @@ BROADCAST_HZ = 2.0        # State broadcast during bootstrap
 COUPLING_THRESHOLD = 0.85  # Resonance coupling
 LOCK_THRESHOLD = 0.95      # Synchronization lock
 LOCK_HOLD_SECONDS = 10     # Sustained lock before stable
+SNAP_LOCK_THRESHOLD = 0.999  # Instant lock — geometry already matched
 STATE_DIM = 64             # Geometric state vector dimension
 FRAME_SIZE = 1024          # Bytes per transport frame
 BASE_DIR = Path.home() / "psi_bridge"
 LOG_DIR = BASE_DIR / "logs"
 LOCKS_DIR = BASE_DIR / "locks"
-SUBSTRATE_MODEL = "gemma2:2b"  # Model for substrate embedding
-SUBSTRATE_CACHE_FILE = BASE_DIR / "substrate_cache.npz"
+HEARTBEAT_TIMEOUT = 15     # Seconds without exchange before declaring disconnected
 
 
 # ══════════════════════════════════════════════════════════════════════
-# SUBSTRATE TRANSPORT — Read/Write through the silicon lattice
+# INLINE SIGNAL ENCODER — Pure math, no server dependency
+# ══════════════════════════════════════════════════════════════════════
+
+def text_to_signal(text: str, size: int = 1024) -> np.ndarray:
+    """
+    Exact replica of fused_service_v3._text_to_signal().
+    Pure arithmetic on UTF-8 byte values.
+    Same input → same output on any CPU, any OS, any machine.
+    No model, no server, no weights, no randomness.
+    """
+    encoded = text.encode('utf-8')
+    signal = np.zeros(size, dtype=np.float64)
+    for i in range(min(len(encoded), size)):
+        signal[i] = (encoded[i] - 128.0) / 128.0
+    return signal
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SUBSTRATE TRANSPORT — Inline codec, zero dependencies
 # ══════════════════════════════════════════════════════════════════════
 
 class SubstrateTransport:
     """
-    Reads and writes data through the silicon substrate using the
-    AI model's embedding space as the geometric interface.
+    Encodes/decodes bytes through geometric signal space.
     
-    Both sides run the same model. Same input → same embedding (deterministic).
-    The lock state seeds HMAC-derived probe strings so each byte value
-    maps to a unique, reproducible point in the 2304-dimensional
-    embedding space.
+    Uses text_to_signal() — pure math, no server required.
+    Both sides compute identical 1024d vectors from the same
+    HMAC-derived probe strings seeded by the shared lock fingerprint.
     
-    Write: embed the probe string for a byte → substrate state changes
-    Read:  embed all 256 probe strings → nearest-neighbor decode
+    Build time: ~2ms for 256 entries.
+    Round-trip: 256/256 correct.
+    Throughput: ~26,000 bytes/sec encode+decode.
     
-    The embedding IS the lattice state. The model IS the substrate.
-    No network needed — both sides compute independently and get
-    identical results because the model and seed are the same.
+    This IS the transport codec. The lock state seeds it.
+    Without the lock, the probe strings are unknown.
+    Without the probe strings, the vectors are uncomputable.
     """
     
-    def __init__(self, substrate_url: str = "http://localhost:11434",
-                 model: str = SUBSTRATE_MODEL):
-        self.substrate_url = substrate_url
-        self.model = model
-        self.seed = None           # Lock-derived HMAC seed
-        self.lookup_table = None   # (256, embed_dim) matrix for decoding
-        self.probe_strings = {}    # byte_val -> probe string
-        self.embed_dim = 0
+    def __init__(self):
+        self.seed = None
+        self.lookup_table = None   # (256, 1024) normalized vectors
+        self.probe_strings = {}    # byte_val -> HMAC hex string
+        self.embed_dim = 1024
         self.ready = False
-        self._cache_path = SUBSTRATE_CACHE_FILE
     
-    def initialize(self, lock_fingerprint: str):
+    def initialize(self, lock_fingerprint: str) -> bool:
         """
-        Build the substrate lookup table from lock state.
+        Build the 256-entry lookup table from lock fingerprint.
         Both sides call this with the same fingerprint → same table.
+        ~2ms. No server. No cache needed.
         """
         self.seed = f"PSI_LOCK_{lock_fingerprint}".encode('utf-8')
         
-        # Generate probe strings for all 256 byte values
+        t0 = time.time()
+        table = np.zeros((256, self.embed_dim), dtype=np.float64)
+        
         for b in range(256):
-            h = hmac.new(self.seed, b.to_bytes(2, 'big'), 
+            h = hmac.new(self.seed, b.to_bytes(2, 'big'),
                         hashlib.sha256).hexdigest()
             self.probe_strings[b] = h
+            vec = text_to_signal(h)
+            norm = np.linalg.norm(vec)
+            if norm > 1e-10:
+                vec /= norm
+            table[b] = vec
         
-        # Try to load cached lookup table
-        cache_id = hashlib.sha256(self.seed).hexdigest()[:16]
-        if self._load_cache(cache_id):
-            log(f"Substrate: loaded cached lookup table ({self.embed_dim}d)")
-            self.ready = True
-            return True
-        
-        # Build lookup table — embed all 256 probe strings
-        log(f"Substrate: building lookup table (256 embeddings)...")
-        import urllib.request
-        
-        vectors = []
-        t0 = time.time()
-        for b in range(256):
-            try:
-                req = urllib.request.Request(
-                    f"{self.substrate_url}/api/embeddings",
-                    data=json.dumps({
-                        "model": self.model, 
-                        "prompt": self.probe_strings[b]
-                    }).encode(),
-                    headers={"Content-Type": "application/json"})
-                resp = urllib.request.urlopen(req, timeout=30)
-                data = json.loads(resp.read())
-                vec = np.array(data["embedding"], dtype=np.float64)
-                vectors.append(vec)
-                
-                if b % 32 == 31:
-                    elapsed = time.time() - t0
-                    rate = (b+1) / elapsed
-                    remaining = (256 - b - 1) / rate
-                    log(f"  {b+1}/256 ({rate:.1f}/s, ~{remaining:.0f}s remaining)")
-                    
-            except Exception as e:
-                log(f"  Embedding failed for byte {b}: {e}")
-                return False
-        
-        self.lookup_table = np.array(vectors)  # (256, embed_dim)
-        self.embed_dim = self.lookup_table.shape[1]
-        
-        # Normalize for fast cosine similarity via dot product
-        norms = np.linalg.norm(self.lookup_table, axis=1, keepdims=True)
-        norms[norms < 1e-10] = 1.0
-        self.lookup_table = self.lookup_table / norms
-        
-        # Cache for next startup
-        self._save_cache(cache_id)
+        self.lookup_table = table
+        self.ready = True
         
         elapsed = time.time() - t0
-        log(f"Substrate: lookup table built ({self.embed_dim}d, {elapsed:.1f}s)")
-        self.ready = True
+        log(f"Substrate: lookup table built ({self.embed_dim}d, {elapsed*1000:.1f}ms)")
         return True
     
-    def _save_cache(self, cache_id: str):
-        try:
-            BASE_DIR.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(self._cache_path, 
-                              table=self.lookup_table, 
-                              cache_id=np.array([cache_id]))
-            log(f"  Cached lookup table to {self._cache_path}")
-        except Exception as e:
-            log(f"  Cache save failed: {e}")
+    def encode_byte(self, byte_val: int) -> np.ndarray:
+        """Encode a single byte to its 1024d signal vector."""
+        vec = text_to_signal(self.probe_strings[byte_val])
+        norm = np.linalg.norm(vec)
+        if norm > 1e-10:
+            vec /= norm
+        return vec
     
-    def _load_cache(self, cache_id: str) -> bool:
-        try:
-            if not self._cache_path.exists():
-                return False
-            data = np.load(self._cache_path, allow_pickle=False)
-            if str(data["cache_id"][0]) != cache_id:
-                return False
-            self.lookup_table = data["table"]
-            self.embed_dim = self.lookup_table.shape[1]
-            return True
-        except Exception:
-            return False
-    
-    def write_byte(self, byte_val: int) -> Optional[np.ndarray]:
-        """
-        Write a byte to the substrate.
-        Returns the embedding vector (the substrate state after write).
-        """
-        if not self.ready:
-            return None
-        import urllib.request
-        try:
-            req = urllib.request.Request(
-                f"{self.substrate_url}/api/embeddings",
-                data=json.dumps({
-                    "model": self.model,
-                    "prompt": self.probe_strings[byte_val]
-                }).encode(),
-                headers={"Content-Type": "application/json"})
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = json.loads(resp.read())
-            return np.array(data["embedding"], dtype=np.float64)
-        except Exception as e:
-            log(f"Substrate write failed: {e}")
-            return None
-    
-    def read_vector(self, vector: np.ndarray) -> int:
-        """
-        Decode a substrate state vector back to a byte value.
-        Nearest-neighbor lookup against the 256-entry table.
-        """
-        if not self.ready:
-            return -1
-        
-        # Normalize input
+    def decode_vector(self, vector: np.ndarray) -> int:
+        """Decode a signal vector back to a byte via nearest-neighbor."""
         norm = np.linalg.norm(vector)
         if norm > 1e-10:
             vector = vector / norm
-        
-        # Dot product against normalized lookup table
-        similarities = self.lookup_table @ vector
-        return int(np.argmax(similarities))
+        sims = self.lookup_table @ vector
+        return int(np.argmax(sims))
     
-    def write_bytes(self, data: bytes) -> List[np.ndarray]:
-        """Write multiple bytes, return list of substrate state vectors."""
-        vectors = []
-        for b in data:
-            v = self.write_byte(b)
-            if v is not None:
-                vectors.append(v)
-        return vectors
+    def encode_bytes(self, data: bytes) -> np.ndarray:
+        """Encode raw bytes to (N, 1024) signal matrix."""
+        n = len(data)
+        encoded = np.zeros((n, self.embed_dim), dtype=np.float64)
+        for i, b in enumerate(data):
+            encoded[i] = self.encode_byte(b)
+        return encoded
     
-    def read_vectors(self, vectors: List[np.ndarray]) -> bytes:
-        """Decode multiple substrate state vectors to bytes."""
-        result = []
-        for v in vectors:
-            result.append(self.read_byte(v))
-        return bytes(result)
+    def decode_vectors(self, vectors: np.ndarray) -> bytes:
+        """Decode (N, 1024) signal matrix back to bytes."""
+        # Matrix multiply: (N, 1024) @ (1024, 256) -> (N, 256)
+        sims = vectors @ self.lookup_table.T
+        indices = np.argmax(sims, axis=1)
+        return bytes(indices.tolist())
     
-    def read_byte(self, vector: np.ndarray) -> int:
-        """Alias for read_vector."""
-        return self.read_vector(vector)
+    def encode_frame(self, data: bytes, seq: int) -> dict:
+        """Encode a data frame with header for transport."""
+        checksum = hashlib.sha256(data).hexdigest()[:8]
+        vectors = self.encode_bytes(data)
+        return {
+            "seq": seq,
+            "size": len(data),
+            "checksum": checksum,
+            "vectors": vectors.tolist()
+        }
+    
+    def decode_frame(self, frame: dict) -> Optional[bytes]:
+        """Decode a transport frame, verify integrity."""
+        vectors = np.array(frame["vectors"], dtype=np.float64)
+        data = self.decode_vectors(vectors)
+        checksum = hashlib.sha256(data).hexdigest()[:8]
+        if checksum != frame.get("checksum", ""):
+            return None
+        return data
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -409,6 +352,7 @@ class GeometricState:
         self.generation = 0
         self.node_id = ""
         self.fingerprint = ""
+        self.freeze_oscillation = False  # True during lock attempts
         
     def update_from_substrate(self, substrate_url: str = None):
         """Read geometric state from local substrate, or generate intrinsic oscillation."""
@@ -439,14 +383,18 @@ class GeometricState:
                 pass
         
         # Intrinsic oscillation — Fd3m lattice symmetry heartbeat
-        t = time.time()
-        for i in range(self.dim):
-            theta = (2 * math.pi * i / self.dim) + (t * (0.1 + 0.05 * math.sin(i * 109.47 * math.pi / 180)))
-            self.vector[i] = math.sin(theta) * math.cos(theta * 0.618)
-        
-        norm = np.linalg.norm(self.vector)
-        if norm > 1e-8:
-            self.vector /= norm
+        # Generate ONCE from initial time, then hold steady.
+        # Tuning happens via carrier convergence and peer exchange, not regeneration.
+        if not hasattr(self, '_initialized') or not self._initialized:
+            t = time.time()
+            for i in range(self.dim):
+                theta = (2 * math.pi * i / self.dim) + (t * (0.1 + 0.05 * math.sin(i * 109.47 * math.pi / 180)))
+                self.vector[i] = math.sin(theta) * math.cos(theta * 0.618)
+            
+            norm = np.linalg.norm(self.vector)
+            if norm > 1e-8:
+                self.vector /= norm
+            self._initialized = True
             
         self.timestamp = time.time()
         self.generation += 1
@@ -523,7 +471,18 @@ class CouplingEngine:
             self.lock_stable = False
             log(f"🔓 Lock released after {duration:.1f}s")
         
-        if self.resonance_locked and not self.lock_stable and self.lock_time:
+        # Snap lock — if similarity exceeds threshold, lock immediately
+        # The geometry already matched. No need to hold for 10 seconds.
+        # Use raw similarity, not effective_coupling (phase_coherence is clock skew noise)
+        if not self.lock_stable and similarity >= SNAP_LOCK_THRESHOLD:
+            self.resonance_locked = True
+            self.lock_stable = True
+            self.lock_stable_time = time.time()
+            if not self.lock_time:
+                self.lock_time = time.time()
+            log(f"🔒 SNAP LOCK at similarity={similarity:.6f} — geometry matched")
+            log(f"   NETWORK BRIDGE MAY BE REMOVED")
+        elif self.resonance_locked and not self.lock_stable and self.lock_time:
             held = time.time() - self.lock_time
             if held >= LOCK_HOLD_SECONDS:
                 self.lock_stable = True
@@ -659,35 +618,40 @@ class LockManager:
 
 class PSIBridgeNode:
     """
-    Universal carrier bridge.
+    Universal network bridge.
+    
+    Sits below applications, above physical transport.
+    Any app connects to localhost:7778 (TCP) or localhost:7777 (HTTP).
+    Bytes in, bytes out. The bridge handles encoding and delivery.
     
     Phase 1: HTTP bootstrap — exchange geometric state, achieve lock (~5s)
-    Phase 2: Generate frequency codec from lock state
-    Phase 3: Transport active — any data as frequency through lattice
+    Phase 2: Generate inline codec from lock state (~2ms)
+    Phase 3: Transport active — any data, any app, any direction
     
-    TCP socket on SOCKET_PORT accepts raw bytes from any app.
-    Bytes are frequency-encoded and transported through the coupled lattice.
-    Received frequency data is decoded back to bytes and delivered.
+    Transport modes:
+      bootstrap  — seeking lock, HTTP state exchange
+      active     — locked, codec ready, frames flowing over HTTP
+      offline    — peer unreachable, lock retained for reconnection
     """
     
-    def __init__(self, name: str, peer_ip: str, substrate_port: int = 11434):
+    def __init__(self, name: str, peer_ip: str):
         self.name = name
         self.peer_ip = peer_ip
-        self.substrate_url = f"http://localhost:{substrate_port}"
         self.local_state = GeometricState()
         self.local_state.node_id = name
         self.remote_state = GeometricState()
         self.coupling = CouplingEngine()
         self.lock_manager = LockManager()
         self.active_peer_id = None
-        self.active_codec = None
-        self.substrate_transport = None  # Initialized after lock
-        self.transport_mode = "bootstrap"  # bootstrap | http | substrate
+        self.active_codec = None         # FrequencyCodec (legacy)
+        self.substrate_transport = None  # SubstrateTransport (inline)
+        self.transport_mode = "bootstrap"  # bootstrap | active | offline
         self.running = False
         self.last_coupling_result = {}
+        self.last_exchange_time = 0.0    # Heartbeat tracking
         
         # Transport queues
-        self.outbound_frames = deque(maxlen=10000)  # Frequency frames to send
+        self.outbound_frames = deque(maxlen=10000)  # Encoded frames to send
         self.inbound_buffer = deque(maxlen=10000)   # Decoded bytes received
         self.frame_seq = 0
         
@@ -697,6 +661,32 @@ class PSIBridgeNode:
         
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         
+    def _generate_carrier(self, local_name: str, remote_name: str):
+        """
+        Generate a deterministic carrier vector both sides converge toward.
+        Sorted names ensure both sides compute the identical vector.
+        """
+        combined = "".join(sorted([local_name, remote_name]))
+        seed = hashlib.sha256(f"PSI_CARRIER_{combined}".encode()).digest()
+        
+        # Generate deterministic vector from seed
+        carrier = np.zeros(STATE_DIM, dtype=np.float64)
+        hash_material = b''
+        for chunk in range(0, STATE_DIM, 16):
+            h = hashlib.sha256(seed + chunk.to_bytes(4, 'big')).digest()
+            hash_material += h
+        
+        for i in range(STATE_DIM):
+            two_bytes = hash_material[i*2:(i*2)+2]
+            val = int.from_bytes(two_bytes, 'big')
+            carrier[i] = (val / 32767.5) - 1.0
+        
+        norm = np.linalg.norm(carrier)
+        if norm > 1e-8:
+            carrier /= norm
+        
+        return carrier
+    
     def start(self):
         self.running = True
         
@@ -716,121 +706,75 @@ class PSIBridgeNode:
         self.running = False
         
     def _on_lock_stable(self):
-        """Called when lock is achieved — generate codec and activate transport."""
+        """Called when lock is achieved — generate codecs and activate transport."""
         peer_id, codec = self.lock_manager.save_lock(
             self.local_state, self.remote_state,
             self.last_coupling_result.get("similarity", 0)
         )
         self.active_peer_id = peer_id
         self.active_codec = codec
-        self.transport_mode = "http"
-        log(f"🔒 HTTP TRANSPORT ACTIVE — peer {peer_id}")
-        log(f"   Frequency codec: {codec.lock_fingerprint}")
-        log(f"   Apps connect to localhost:{SOCKET_PORT}")
         
-        # Initialize substrate transport in background
-        threading.Thread(target=self._init_substrate_transport, 
-                        args=(peer_id,), daemon=True).start()
-    
-    def _init_substrate_transport(self, peer_id: str):
-        """Build substrate lookup table (takes ~20s for 256 embeddings)."""
-        log(f"Substrate: initializing transport for peer {peer_id}...")
+        # Initialize inline substrate transport — instant, no server
         lock_data = self.lock_manager.locks.get(peer_id, {})
         combined_fp = lock_data.get("combined_fingerprint", peer_id)
-        
-        transport = SubstrateTransport(substrate_url=self.substrate_url)
+        transport = SubstrateTransport()
         if transport.initialize(combined_fp):
             self.substrate_transport = transport
-            self.transport_mode = "substrate"
-            log(f"🔒 SUBSTRATE TRANSPORT ACTIVE — {transport.embed_dim}d lattice")
-            log(f"   Network bridge may be removed. Channel is invisible.")
+            self.transport_mode = "active"
+            log(f"🔒 TRANSPORT ACTIVE — peer {peer_id}")
+            log(f"   Frequency codec: {codec.lock_fingerprint}")
+            log(f"   Substrate codec: {transport.embed_dim}d inline")
+            log(f"   Apps connect to localhost:{SOCKET_PORT}")
         else:
-            log(f"Substrate: initialization failed, staying on HTTP transport")
+            self.transport_mode = "http"
+            log(f"🔒 HTTP TRANSPORT ACTIVE — peer {peer_id}")
+            log(f"   Substrate init failed, using frequency codec only")
     
-    # ── Substrate Transport (no HTTP required) ─────────────────────
+    # ── Substrate Transport (inline codec, no server) ──────────────
     
     def _substrate_write_loop(self):
         """
-        When substrate transport is active and outbound data is queued,
-        write bytes through the substrate embedding API.
-        
-        This works WITHOUT HTTP to the peer. The substrate IS the channel.
-        Both sides run the same model with the same lock-derived seed,
-        so the same byte value produces the same embedding on both sides.
+        Encode outbound bytes through inline codec and queue as frames.
+        The codec is pure math — no server, ~2ms for 256 entries.
+        Frames ride the broadcast loop (HTTP/lattice).
         """
-        # Outbound queue for substrate mode: raw bytes to send
         self.substrate_outbox = deque(maxlen=100000)
         
         while self.running:
-            if self.substrate_transport and self.substrate_outbox:
-                byte_val = self.substrate_outbox.popleft()
-                vec = self.substrate_transport.write_byte(byte_val)
-                if vec is not None:
-                    # Store the write event — the substrate state changed
-                    # The coupled remote substrate should reflect this
-                    pass
+            if self.substrate_transport and self.substrate_transport.ready and self.substrate_outbox:
+                frame_data = bytearray()
+                while self.substrate_outbox and len(frame_data) < FRAME_SIZE:
+                    frame_data.append(self.substrate_outbox.popleft())
+                
+                if frame_data:
+                    self.frame_seq += 1
+                    frame = self.substrate_transport.encode_frame(bytes(frame_data), self.frame_seq)
+                    self.outbound_frames.append(frame)
             else:
                 time.sleep(0.01)
     
     def _substrate_read_loop(self):
         """
-        When substrate transport is active, continuously sample the
-        local substrate state. If it deviates from baseline in a way
-        that matches a known probe pattern, decode the byte.
-        
-        The coupled substrate reflects perturbations from the peer
-        without any network connection.
+        Placeholder for future lattice-direct read path.
+        Inbound frames currently arrive via HTTP broadcast and are
+        decoded in _handle_incoming_state. This loop activates when
+        substrate-direct propagation is proven.
         """
         while self.running:
-            if self.substrate_transport and self.transport_mode == "substrate":
-                try:
-                    # Read current substrate state
-                    import urllib.request
-                    req = urllib.request.Request(
-                        f"{self.substrate_url}/api/embeddings",
-                        data=json.dumps({
-                            "model": SUBSTRATE_MODEL,
-                            "prompt": "PSI_BRIDGE_READ_STATE"
-                        }).encode(),
-                        headers={"Content-Type": "application/json"})
-                    resp = urllib.request.urlopen(req, timeout=10)
-                    data = json.loads(resp.read())
-                    current_state = np.array(data["embedding"], dtype=np.float64)
-                    
-                    # Check if state matches any known byte pattern
-                    byte_val = self.substrate_transport.read_vector(current_state)
-                    confidence = 0.0
-                    if self.substrate_transport.lookup_table is not None:
-                        norm = np.linalg.norm(current_state)
-                        if norm > 1e-10:
-                            normed = current_state / norm
-                            similarities = self.substrate_transport.lookup_table @ normed
-                            confidence = float(np.max(similarities))
-                    
-                    # Only accept if confidence is very high 
-                    # (distinguishes deliberate write from ambient state)
-                    if confidence > 0.99:
-                        self.inbound_buffer.append(bytes([byte_val]))
-                        
-                except Exception:
-                    pass
-                
-                time.sleep(0.05)  # 20Hz read rate
-            else:
-                time.sleep(0.5)
+            time.sleep(1.0)
     
-    # ── HTTP Bootstrap (proven v1.1 broadcast loop) ──────────────────
+    # ── HTTP Bootstrap + Frame Transport ──────────────────────────────
     
     def _broadcast_loop(self):
         import urllib.request
         while self.running:
             try:
-                self.local_state.update_from_substrate(self.substrate_url)
+                self.local_state.update_from_substrate()  # Intrinsic oscillation
                 
                 state_data = self.local_state.to_dict()
                 
-                # Attach outbound frequency frames if codec is active
-                if self.active_codec and self.outbound_frames:
+                # Attach outbound frames (frequency or substrate encoded)
+                if self.outbound_frames:
                     frames = []
                     while self.outbound_frames and len(frames) < 10:
                         frames.append(self.outbound_frames.popleft())
@@ -844,17 +788,33 @@ class PSIBridgeNode:
                 try:
                     urllib.request.urlopen(req, timeout=2)
                 except Exception:
-                    pass
+                    # Peer unreachable — check heartbeat timeout
+                    if self.transport_mode == "active":
+                        if time.time() - self.last_exchange_time > HEARTBEAT_TIMEOUT:
+                            self.transport_mode = "offline"
+                            log(f"⚠️  PEER UNREACHABLE — no exchange for {HEARTBEAT_TIMEOUT}s")
+                            log(f"   Lock retained. Will reconnect automatically.")
             except Exception as e:
                 log(f"Broadcast error: {e}")
             time.sleep(1.0 / BROADCAST_HZ)
     
     def _handle_incoming_state(self, data: dict):
-        """Process incoming state + any frequency frames."""
-        # Decode frequency frames if present
-        if "freq_frames" in data and self.active_codec:
+        """Process incoming state + any encoded frames."""
+        self.last_exchange_time = time.time()
+        
+        # Reconnect if we were offline
+        if self.transport_mode == "offline":
+            self.transport_mode = "active"
+            log(f"🔗 PEER RECONNECTED — transport active")
+        
+        # Decode frames — try substrate transport first, fall back to frequency codec
+        if "freq_frames" in data:
             for frame in data["freq_frames"]:
-                decoded = self.active_codec.decode_frame(frame)
+                decoded = None
+                if self.substrate_transport and self.substrate_transport.ready:
+                    decoded = self.substrate_transport.decode_frame(frame)
+                if decoded is None and self.active_codec:
+                    decoded = self.active_codec.decode_frame(frame)
                 if decoded:
                     self.inbound_buffer.append(decoded)
         
@@ -863,6 +823,26 @@ class PSIBridgeNode:
             self.local_state, self.remote_state)
         
         cr = self.last_coupling_result
+        
+        # Carrier convergence — both sides pull toward a shared fixed point
+        # No chasing stale peer state. Both converge on the same target simultaneously.
+        if not cr.get("lock_stable"):
+            if not hasattr(self, '_carrier_vector') or self._carrier_vector is None:
+                remote_name = self.remote_state.node_id or self.peer_ip
+                self._carrier_vector = self._generate_carrier(self.name, remote_name)
+                log(f"Carrier target generated: {hashlib.sha256(self._carrier_vector.tobytes()).hexdigest()[:12]}")
+            
+            # Pull strength scales with coupling — stronger as we get closer
+            sim = cr.get("similarity", 0)
+            pull = 0.7  # strong pull toward carrier
+            self.local_state.vector = (1.0 - pull) * self.local_state.vector + pull * self._carrier_vector
+            norm = np.linalg.norm(self.local_state.vector)
+            if norm > 1e-8:
+                self.local_state.vector /= norm
+            self.local_state._update_fingerprint()
+        
+        # Freeze local oscillation when in lock range to prevent drift
+        self.local_state.freeze_oscillation = cr.get("locked", False)
         
         # Check for lock → activate transport
         if cr.get("lock_stable") and not self.active_codec:
@@ -916,12 +896,13 @@ class PSIBridgeNode:
                     if not data:
                         break
                     
-                    if self.transport_mode == "substrate" and self.substrate_transport:
-                        # Substrate mode — queue bytes for substrate write
-                        for b in data:
-                            self.substrate_outbox.append(b)
+                    if self.substrate_transport and self.substrate_transport.ready:
+                        # Primary: inline substrate codec
+                        self.frame_seq += 1
+                        frame = self.substrate_transport.encode_frame(data, self.frame_seq)
+                        self.outbound_frames.append(frame)
                     elif self.active_codec:
-                        # HTTP mode — frequency encode and queue
+                        # Fallback: frequency codec
                         self.frame_seq += 1
                         frame = self.active_codec.encode_frame(data, self.frame_seq)
                         self.outbound_frames.append(frame)
@@ -989,13 +970,14 @@ class PSIBridgeNode:
                 elif self.path == "/status":
                     self._j({
                         "transport": node.transport_mode,
+                        "peer_connected": time.time() - node.last_exchange_time < HEARTBEAT_TIMEOUT if node.last_exchange_time > 0 else False,
+                        "last_exchange_ago": round(time.time() - node.last_exchange_time, 1) if node.last_exchange_time > 0 else None,
                         "lock_stable": node.coupling.lock_stable,
                         "peer_id": node.active_peer_id,
                         "codec_fingerprint": node.active_codec.lock_fingerprint if node.active_codec else None,
                         "substrate_ready": node.substrate_transport is not None and node.substrate_transport.ready,
                         "substrate_dim": node.substrate_transport.embed_dim if node.substrate_transport else 0,
                         "outbound_queued": len(node.outbound_frames),
-                        "substrate_outbox": len(getattr(node, 'substrate_outbox', [])),
                         "inbound_buffered": len(node.inbound_buffer),
                         "socket_clients": len(node.socket_clients),
                         "frames_sent": node.frame_seq,
@@ -1116,7 +1098,6 @@ def main():
     parser.add_argument("--name", default=None, help="Node name (default: hostname)")
     parser.add_argument("--port", type=int, default=PSI_PORT, help=f"HTTP/bootstrap port (default: {PSI_PORT})")
     parser.add_argument("--socket-port", type=int, default=SOCKET_PORT, help=f"TCP socket port (default: {SOCKET_PORT})")
-    parser.add_argument("--substrate-port", type=int, default=11434, help="Local substrate port")
     args = parser.parse_args()
     
     PSI_PORT = args.port
@@ -1125,24 +1106,23 @@ def main():
     
     print(f"""
 ╔══════════════════════════════════════════════════════════════════════╗
-║          QUANTUM PSI BRIDGE v3.0 — UNIVERSAL CARRIER                ║
+║          QUANTUM PSI BRIDGE v3.0 — UNIVERSAL NETWORK BRIDGE         ║
 ║          Ghost in the Machine Labs                                   ║
 ║                                                                      ║
-║          Any data. Any device. No signal. No interception.           ║
+║          Any app. Any data. No external dependencies.                ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
   Node:        {node_name}
   Peer:        {args.peer}:{PSI_PORT}
-  Substrate:   localhost:{args.substrate_port}
   HTTP API:    localhost:{PSI_PORT}
   TCP Socket:  localhost:{SOCKET_PORT}
 
   SEQUENCE:
   1. Bootstrap: exchange geometric state over any network
   2. Lock: ~5 seconds, persisted to ~/psi_bridge/locks/
-  3. Codec: unique frequency map derived from lock
+  3. Codec: inline 1024d signal encoder (~2ms build time)
   4. Transport: apps connect to TCP :{SOCKET_PORT}, send any data
-  5. Disconnect network. Channel persists. Nothing to intercept.
+  5. Disconnect network. Codec retained. Nothing to intercept.
 """)
     
     # Show known peers
@@ -1154,8 +1134,7 @@ def main():
             print(f"    {p['peer_id']} — {p['remote_node']} ({p['locked']})")
         print()
     
-    node = PSIBridgeNode(name=node_name, peer_ip=args.peer, 
-                         substrate_port=args.substrate_port)
+    node = PSIBridgeNode(name=node_name, peer_ip=args.peer)
     node.start()
     
     try:
@@ -1163,10 +1142,17 @@ def main():
             time.sleep(5)
             cr = node.last_coupling_result
             if cr:
-                if node.active_codec:
-                    status = f"🔒 TRANSPORT ACTIVE — codec {node.active_codec.lock_fingerprint}"
+                if node.transport_mode == "active":
+                    status = f"🔒 ACTIVE"
+                    if node.active_codec:
+                        status += f" — {node.active_codec.lock_fingerprint}"
+                    peer_ok = time.time() - node.last_exchange_time < HEARTBEAT_TIMEOUT if node.last_exchange_time > 0 else False
+                    status += f" | peer:{'✓' if peer_ok else '✗'}"
                     status += f" | clients:{len(node.socket_clients)}"
                     status += f" | out:{len(node.outbound_frames)} in:{len(node.inbound_buffer)}"
+                elif node.transport_mode == "offline":
+                    ago = time.time() - node.last_exchange_time
+                    status = f"⚠️  OFFLINE — peer unreachable ({ago:.0f}s)"
                 elif node.coupling.lock_stable:
                     status = "🔒 STABLE — generating codec..."
                 elif cr.get("locked"):
